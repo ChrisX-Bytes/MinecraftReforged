@@ -5,7 +5,7 @@ SECTION_HEIGHT = 16
 NUM_SECTIONS = CHUNK_HEIGHT // SECTION_HEIGHT   # 24
 WORLD_RADIUS = 50
 
-RENDER_DIST = 12
+RENDER_DIST = 6
 LOAD_DIST = RENDER_DIST + 4
 
 WORLD_BOTTOM = -64
@@ -29,9 +29,11 @@ BLOCK_COLORS = {
     'sand': (0.93, 0.84, 0.69),
     'snow': (0.95, 0.95, 0.98),
     'bedrock': (0.3, 0.3, 0.3),
-    'water': (0.1, 0.3, 0.7),   # 不透明蓝色
+    'water': (0.1, 0.3, 0.7),
 }
-block_types = ['grass_block', 'dirt', 'stone', 'wood', 'leaves', 'sand', 'snow']
+
+# 把 'water' 加入到 block_types 列表（保留原有项）
+block_types = ['grass_block', 'dirt', 'stone', 'wood', 'leaves', 'sand', 'snow', 'water']
 
 # config.py 新增
 MAX_FLUID_LEVEL = 7

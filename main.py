@@ -8,6 +8,8 @@ import random
 import sys
 import os
 import warnings
+import ctypes
+import time
 
 warnings.filterwarnings("ignore")
 
@@ -20,6 +22,9 @@ from chunk_manager import (
 from world_gen import generate_chunk, generate_chunk_to_level, update_chunk_load_levels
 from world_gen.noise import PerlinNoise3D
 from world_gen.fluid_simulator import FluidSimulator
+
+# ---------- 调试开关 ----------
+DEBUG_PROFILE = True  # 打开后会打印流体 tick/ms 和每帧重建耗时，调试时开启，稳定后建议关闭
 
 # ---------- 初始化 ----------
 pygame.init()
@@ -34,13 +39,22 @@ glDisable(GL_CULL_FACE)
 glDisable(GL_LIGHTING)
 glLineWidth(1)
 glMatrixMode(GL_PROJECTION)
-gluPerspective(70, display[0]/display[1], 0.1, 100.0)
+gluPerspective(70, display[0] / display[1], 0.1, 100.0)
 glMatrixMode(GL_MODELVIEW)
 glClearColor(0.53, 0.81, 0.92, 1.0)
 
-fluid_simulator = FluidSimulator()
-fluid_tick_counter = 0
-FLUID_TICK_INTERVAL = 3  # 每3帧更新一次流体
+# ---------- 流体与性能参数（可调整） ----------
+FLUID_TPS = 20.0                     # 逻辑 tick 频率（ticks per second）
+FLUID_DT = 1.0 / FLUID_TPS
+fluid_time_acc = 0.0
+
+# 每个逻辑 tick 最多允许的写操作（set_block），防止单次 tick 写太多触发大量重建
+fluid_simulator = FluidSimulator(updates_per_tick=80)
+# fluid_simulator = FluidSimulator(updates_per_tick=150)  # 如果机器性能允许可调高
+# fluid_simulator = FluidSimulator(updates_per_tick=40)   # 更保守的值
+
+# 每帧最多重建的区块数量（避免 glBufferData 峰值）
+REBUILDS_PER_FRAME = 2
 
 # ---------- 字体 ----------
 FONT_PATH = "./File/minecraftfont.woff"
@@ -72,24 +86,24 @@ def draw_loading(progress):
     glClearColor(0.15, 0.15, 0.25, 1.0)
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
     bar_width, bar_height = 400, 20
-    cx, cy = display[0]//2, display[1]//2
-    bar_x, bar_y = cx-bar_width//2, cy-bar_height//2
-    glColor3f(0.3,0.3,0.4)
+    cx, cy = display[0] // 2, display[1] // 2
+    bar_x, bar_y = cx - bar_width // 2, cy - bar_height // 2
+    glColor3f(0.3, 0.3, 0.4)
     glBegin(GL_QUADS)
-    glVertex2f(bar_x, bar_y); glVertex2f(bar_x+bar_width, bar_y)
-    glVertex2f(bar_x+bar_width, bar_y+bar_height); glVertex2f(bar_x, bar_y+bar_height)
+    glVertex2f(bar_x, bar_y); glVertex2f(bar_x + bar_width, bar_y)
+    glVertex2f(bar_x + bar_width, bar_y + bar_height); glVertex2f(bar_x, bar_y + bar_height)
     glEnd()
-    fill = int(bar_width*progress)
-    glColor3f(0.2,0.9,0.3)
+    fill = int(bar_width * progress)
+    glColor3f(0.2, 0.9, 0.3)
     glBegin(GL_QUADS)
-    glVertex2f(bar_x, bar_y); glVertex2f(bar_x+fill, bar_y)
-    glVertex2f(bar_x+fill, bar_y+bar_height); glVertex2f(bar_x, bar_y+bar_height)
+    glVertex2f(bar_x, bar_y); glVertex2f(bar_x + fill, bar_y)
+    glVertex2f(bar_x + fill, bar_y + bar_height); glVertex2f(bar_x, bar_y + bar_height)
     glEnd()
-    glColor3f(0.8,0.8,0.9)
+    glColor3f(0.8, 0.8, 0.9)
     glLineWidth(2)
     glBegin(GL_LINE_LOOP)
-    glVertex2f(bar_x, bar_y); glVertex2f(bar_x+bar_width, bar_y)
-    glVertex2f(bar_x+bar_width, bar_y+bar_height); glVertex2f(bar_x, bar_y+bar_height)
+    glVertex2f(bar_x, bar_y); glVertex2f(bar_x + bar_width, bar_y)
+    glVertex2f(bar_x + bar_width, bar_y + bar_height); glVertex2f(bar_x, bar_y + bar_height)
     glEnd()
     pygame.display.flip()
     glPopMatrix()
@@ -104,24 +118,24 @@ def generate_initial_world():
     seed = 114514
     noise_gen = PerlinNoise3D(seed=seed)
     start_cx, start_cz = 0, 0
-    total_chunks = (2*RENDER_DIST+1)**2
+    total_chunks = (2 * RENDER_DIST + 1) ** 2
     generated = 0
     draw_loading(0.0)
 
-    for dx in range(-RENDER_DIST, RENDER_DIST+1):
-        for dz in range(-RENDER_DIST, RENDER_DIST+1):
-            cx, cz = start_cx+dx, start_cz+dz
+    for dx in range(-RENDER_DIST, RENDER_DIST + 1):
+        for dz in range(-RENDER_DIST, RENDER_DIST + 1):
+            cx, cz = start_cx + dx, start_cz + dz
             generate_chunk(cx, cz, noise_gen, seed)
             generated += 1
-            draw_loading(generated/total_chunks)
+            draw_loading(generated / total_chunks)
             for event in pygame.event.get():
                 if event.type == QUIT:
                     pygame.quit(); sys.exit()
 
-    for dx in range(-LOAD_DIST, LOAD_DIST+1):
-        for dz in range(-LOAD_DIST, LOAD_DIST+1):
-            cx, cz = start_cx+dx, start_cz+dz
-            if (cx,cz) not in chunks:
+    for dx in range(-LOAD_DIST, LOAD_DIST + 1):
+        for dz in range(-LOAD_DIST, LOAD_DIST + 1):
+            cx, cz = start_cx + dx, start_cz + dz
+            if (cx, cz) not in chunks:
                 chunk = get_chunk(cx, cz)
                 generate_chunk_to_level(cx, cz, noise_gen, seed, LOAD_LEVEL_INACCESSIBLE)
 
@@ -131,7 +145,7 @@ def generate_initial_world():
     glClearColor(0.53, 0.81, 0.92, 1.0)
     glMatrixMode(GL_PROJECTION)
     glLoadIdentity()
-    gluPerspective(70, display[0]/display[1], 0.1, 100.0)
+    gluPerspective(70, display[0] / display[1], 0.1, 100.0)
     glMatrixMode(GL_MODELVIEW)
     glLoadIdentity()
     glEnable(GL_DEPTH_TEST)
@@ -140,7 +154,7 @@ def generate_initial_world():
 
 noise_gen, seed = generate_initial_world()
 
-# ---------- 玩家类 ----------
+# ---------- 玩家 ----------
 class Player:
     def __init__(self):
         self.x, self.y, self.z = 0, 65, 0
@@ -163,7 +177,7 @@ class Player:
     def collide(self, x, y, z):
         shrink = self.EPSILON
         half = self.width - shrink
-        h = self.height - shrink*2
+        h = self.height - shrink * 2
         if half <= 0 or h <= 0: return False
         foot_y = shrink
         head_y = shrink + h
@@ -187,14 +201,16 @@ class Player:
         if keys[K_s]: mx -= fwd[0]; mz -= fwd[2]
         if keys[K_a]: mx -= right[0]; mz -= right[2]
         if keys[K_d]: mx += right[0]; mz += right[2]
-        l = math.hypot(mx,mz)
-        if l>0: mx/=l; mz/=l
+        l = math.hypot(mx, mz)
+        if l > 0:
+            mx /= l; mz /= l
         self.vx = mx * speed
         self.vz = mz * speed
         if keys[K_SPACE] and self.on_ground:
             self.vy = 9.0
         self.vy -= 32 * dt
-        if self.vy < -78.4: self.vy = -78.4
+        if self.vy < -78.4:
+            self.vy = -78.4
 
         start_x, start_y, start_z = self.x, self.y, self.z
 
@@ -205,7 +221,7 @@ class Player:
         else:
             low, high = self.y, new_y
             for _ in range(8):
-                mid = (low+high)*0.5
+                mid = (low + high) * 0.5
                 if self.collide(self.x, mid, self.z):
                     high = mid
                 else:
@@ -242,17 +258,17 @@ class Player:
             self.vx = self.vy = self.vz = 0
 
     def eye(self):
-        return (self.x, self.y+self.eye_height, self.z)
+        return (self.x, self.y + self.eye_height, self.z)
 
     def look(self):
         pitch = math.radians(self.rot_x)
         yaw = math.radians(self.rot_y)
-        return (math.cos(pitch)*math.sin(yaw), math.sin(pitch), -math.cos(pitch)*math.cos(yaw))
+        return (math.cos(pitch) * math.sin(yaw), math.sin(pitch), -math.cos(pitch) * math.cos(yaw))
 
     def intersects_block(self, bx, by, bz):
         shrink = self.EPSILON
         half = self.width - shrink
-        h = self.height - shrink*2
+        h = self.height - shrink * 2
         if half <= 0 or h <= 0: return False
         pminx = self.x - half; pmaxx = self.x + half
         pminy = self.y + shrink; pmaxy = self.y + shrink + h
@@ -268,7 +284,7 @@ player = Player()
 spawn_x, spawn_z = 0, 0
 for y in range(100, -64, -1):
     if is_solid(spawn_x, y, spawn_z):
-        player.y = y+1
+        player.y = y + 1
         break
 player.x, player.z = spawn_x, spawn_z
 player.spawn_x, player.spawn_y, player.spawn_z = player.x, player.y, player.z
@@ -276,74 +292,71 @@ player.prev_x, player.prev_y, player.prev_z = player.x, player.y, player.z
 
 # ---------- 射线投射 ----------
 def raycast(origin, direction, max_dist=10):
-    dx,dy,dz = direction
-    length = math.hypot(dx,dy,dz)
+    dx, dy, dz = direction
+    length = math.hypot(dx, dy, dz)
     if length < 1e-12: return None, None
-    dx,dy,dz = dx/length, dy/length, dz/length
-    x,y,z = origin
-    bx = int(math.floor(x+0.5))
-    by = int(math.floor(y+0.5))
-    bz = int(math.floor(z+0.5))
-    start_block = (bx,by,bz)
-    step_x = 1 if dx>0 else -1
-    step_y = 1 if dy>0 else -1
-    step_z = 1 if dz>0 else -1
-    t_delta_x = abs(1.0/dx) if abs(dx)>1e-12 else float('inf')
-    t_delta_y = abs(1.0/dy) if abs(dy)>1e-12 else float('inf')
-    t_delta_z = abs(1.0/dz) if abs(dz)>1e-12 else float('inf')
-    t_max_x = ((bx+0.5)-x)/dx if dx>0 else ((bx-0.5)-x)/dx if dx<0 else float('inf')
-    t_max_y = ((by+0.5)-y)/dy if dy>0 else ((by-0.5)-y)/dy if dy<0 else float('inf')
-    t_max_z = ((bz+0.5)-z)/dz if dz>0 else ((bz-0.5)-z)/dz if dz<0 else float('inf')
+    dx, dy, dz = dx / length, dy / length, dz / length
+    x, y, z = origin
+    bx = int(math.floor(x + 0.5))
+    by = int(math.floor(y + 0.5))
+    bz = int(math.floor(z + 0.5))
+    start_block = (bx, by, bz)
+    step_x = 1 if dx > 0 else -1
+    step_y = 1 if dy > 0 else -1
+    step_z = 1 if dz > 0 else -1
+    t_delta_x = abs(1.0 / dx) if abs(dx) > 1e-12 else float('inf')
+    t_delta_y = abs(1.0 / dy) if abs(dy) > 1e-12 else float('inf')
+    t_delta_z = abs(1.0 / dz) if abs(dz) > 1e-12 else float('inf')
+    t_max_x = ((bx + 0.5) - x) / dx if dx > 0 else ((bx - 0.5) - x) / dx if dx < 0 else float('inf')
+    t_max_y = ((by + 0.5) - y) / dy if dy > 0 else ((by - 0.5) - y) / dy if dy < 0 else float('inf')
+    t_max_z = ((bz + 0.5) - z) / dz if dz > 0 else ((bz - 0.5) - z) / dz if dz < 0 else float('inf')
     travel = 0.0
-    normal = (0,0,0)
+    normal = (0, 0, 0)
     while travel <= max_dist:
-        if (bx,by,bz) != start_block and is_solid(bx,by,bz):
-            return (bx,by,bz), normal
+        if (bx, by, bz) != start_block and is_solid(bx, by, bz):
+            return (bx, by, bz), normal
         if t_max_x < t_max_y and t_max_x < t_max_z:
             travel = t_max_x
             bx += step_x
             t_max_x += t_delta_x
-            normal = (-step_x,0,0)
+            normal = (-step_x, 0, 0)
         elif t_max_y < t_max_z:
             travel = t_max_y
             by += step_y
             t_max_y += t_delta_y
-            normal = (0,-step_y,0)
+            normal = (0, -step_y, 0)
         else:
             travel = t_max_z
             bz += step_z
             t_max_z += t_delta_z
-            normal = (0,0,-step_z)
+            normal = (0, 0, -step_z)
     return None, None
 
-# ---------- 渲染 ----------
-def draw_crosshair():
-    glPushMatrix()
-    glLoadIdentity()
-    glMatrixMode(GL_PROJECTION)
-    glPushMatrix()
-    glLoadIdentity()
-    glOrtho(0, display[0], display[1], 0, -1, 1)
-    glDisable(GL_DEPTH_TEST)
-    cx,cy = display[0]//2, display[1]//2
-    glColor3f(1,1,1)
-    glLineWidth(2)
-    size = 12
-    glBegin(GL_LINES)
-    glVertex2f(cx-size, cy); glVertex2f(cx+size, cy)
-    glVertex2f(cx, cy-size); glVertex2f(cx, cy+size)
-    glEnd()
-    glEnable(GL_DEPTH_TEST)
-    glPopMatrix()
-    glMatrixMode(GL_MODELVIEW)
-    glPopMatrix()
-
+# ---------- 渲染（含受限重建） ----------
 def render_chunks():
-    for (cx,cz), chunk in chunks.items():
+    start_rebuild_time = time.time() if DEBUG_PROFILE else None
+    pcx, pcz = get_chunk_pos(player.x, player.z)
+    items = list(chunks.items())
+    # 优先靠近玩家的区块先重建
+    items.sort(key=lambda it: max(abs(it[0][0] - pcx), abs(it[0][1] - pcz)))
+    rebuilds = 0
+    rebuild_ms_total = 0.0
+    for (cx, cz), chunk in items:
         if chunk.load_level > LOAD_LEVEL_FULL:
             continue
         if chunk.is_dirty:
-            chunk.rebuild_mesh()
+            if rebuilds < REBUILDS_PER_FRAME:
+                if DEBUG_PROFILE:
+                    t0 = time.time()
+                    chunk.rebuild_mesh()
+                    t1 = time.time()
+                    rebuild_ms_total += (t1 - t0) * 1000.0
+                else:
+                    chunk.rebuild_mesh()
+                rebuilds += 1
+            else:
+                # defer rebuild to later frames
+                continue
         if chunk.face_count > 0:
             glBindBuffer(GL_ARRAY_BUFFER, chunk.face_vbo)
             glEnableClientState(GL_VERTEX_ARRAY)
@@ -363,9 +376,35 @@ def render_chunks():
             glDisableClientState(GL_VERTEX_ARRAY)
             glDisableClientState(GL_COLOR_ARRAY)
     glBindBuffer(GL_ARRAY_BUFFER, 0)
+    if DEBUG_PROFILE:
+        rebuild_time = (time.time() - start_rebuild_time) * 1000.0 if start_rebuild_time else rebuild_ms_total
+        # Show rebuild total time for this frame (approx)
+        print(f"[PROFILE] rebuilds={rebuilds}, rebuild_ms={rebuild_time:.1f}")
+
+def draw_crosshair():
+    glPushMatrix()
+    glLoadIdentity()
+    glMatrixMode(GL_PROJECTION)
+    glPushMatrix()
+    glLoadIdentity()
+    glOrtho(0, display[0], display[1], 0, -1, 1)
+    glDisable(GL_DEPTH_TEST)
+    cx, cy = display[0] // 2, display[1] // 2
+    glColor3f(1, 1, 1)
+    glLineWidth(2)
+    size = 12
+    glBegin(GL_LINES)
+    glVertex2f(cx - size, cy); glVertex2f(cx + size, cy)
+    glVertex2f(cx, cy - size); glVertex2f(cx, cy + size)
+    glEnd()
+    glEnable(GL_DEPTH_TEST)
+    glPopMatrix()
+    glMatrixMode(GL_MODELVIEW)
+    glPopMatrix()
 
 def draw_debug_info():
-    if not show_debug: return
+    if not show_debug:
+        return
     global fps_counter, fps_time, fps_display
     fps_counter += 1
     cur = pygame.time.get_ticks()
@@ -373,10 +412,10 @@ def draw_debug_info():
         fps_display = fps_counter
         fps_counter = 0
         fps_time = cur
-    cx,cz = get_chunk_pos(player.x, player.z)
-    block_x = int(math.floor(player.x+0.5))
-    block_y = int(math.floor(player.y+0.5))
-    block_z = int(math.floor(player.z+0.5))
+    cx, cz = get_chunk_pos(player.x, player.z)
+    block_x = int(math.floor(player.x + 0.5))
+    block_y = int(math.floor(player.y + 0.5))
+    block_z = int(math.floor(player.z + 0.5))
     loaded = len([c for c in chunks.values() if c.load_level <= LOAD_LEVEL_FULL])
     total = len(chunks)
     lines = [
@@ -390,12 +429,12 @@ def draw_debug_info():
     line_height = 22
     padding = 10
     surf_width = 340
-    surf_height = len(lines)*line_height + 30
+    surf_height = len(lines) * line_height + 30
     text_surf = pygame.Surface((surf_width, surf_height), pygame.SRCALPHA)
-    text_surf.fill((0,0,0,0))
+    text_surf.fill((0, 0, 0, 0))
     y_pos = 15
     for line in lines:
-        line_surf = debug_font.render(line, True, (255,255,255))
+        line_surf = debug_font.render(line, True, (255, 255, 255))
         text_surf.blit(line_surf, (padding, y_pos))
         y_pos += line_height
     glMatrixMode(GL_PROJECTION)
@@ -408,30 +447,30 @@ def draw_debug_info():
     glDisable(GL_DEPTH_TEST)
     glEnable(GL_BLEND)
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-    glColor4f(0,0,0,0.5)
-    w,h = text_surf.get_size()
+    glColor4f(0, 0, 0, 0.5)
+    w, h = text_surf.get_size()
     glBegin(GL_QUADS)
-    glVertex2f(10,10); glVertex2f(w+20,10); glVertex2f(w+20,h+20); glVertex2f(10,h+20)
+    glVertex2f(10, 10); glVertex2f(w + 20, 10); glVertex2f(w + 20, h + 20); glVertex2f(10, h + 20)
     glEnd()
     data = pygame.image.tobytes(text_surf, 'RGBA', False)
     tex_id = glGenTextures(1)
     glBindTexture(GL_TEXTURE_2D, tex_id)
-    glPixelStorei(GL_UNPACK_ALIGNMENT,1)
-    glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA,w,h,0,GL_RGBA,GL_UNSIGNED_BYTE,data)
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1)
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, data)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
     glEnable(GL_TEXTURE_2D)
-    glColor4f(1,1,1,1)
+    glColor4f(1, 1, 1, 1)
     glBegin(GL_QUADS)
-    glTexCoord2f(0,0); glVertex2f(10,10)
-    glTexCoord2f(1,0); glVertex2f(w+10,10)
-    glTexCoord2f(1,1); glVertex2f(w+10,h+10)
-    glTexCoord2f(0,1); glVertex2f(10,h+10)
+    glTexCoord2f(0, 0); glVertex2f(10, 10)
+    glTexCoord2f(1, 0); glVertex2f(w + 10, 10)
+    glTexCoord2f(1, 1); glVertex2f(w + 10, h + 10)
+    glTexCoord2f(0, 1); glVertex2f(10, h + 10)
     glEnd()
     glDisable(GL_TEXTURE_2D)
     glDisable(GL_BLEND)
     glDeleteTextures([tex_id])
-    glBindTexture(GL_TEXTURE_2D,0)
+    glBindTexture(GL_TEXTURE_2D, 0)
     glMatrixMode(GL_PROJECTION)
     glPopMatrix()
     glMatrixMode(GL_MODELVIEW)
@@ -449,17 +488,12 @@ while running:
     dt = clock.tick(144) / 1000.0
     keys = pygame.key.get_pressed()
 
-    # 每3帧更新一次流体（减少性能开销）
-    fluid_tick_counter += 1
-    if fluid_tick_counter >= FLUID_TICK_INTERVAL:
-        fluid_simulator.tick()
-        fluid_tick_counter = 0
-
+    # 处理输入事件
     for event in pygame.event.get():
         if event.type == QUIT:
             running = False
         elif event.type == MOUSEMOTION and lock_mouse:
-            dx,dy = event.rel
+            dx, dy = event.rel
             player.rot_y += dx * 0.2
             player.rot_x -= dy * 0.2
             player.rot_x = max(-89, min(89, player.rot_x))
@@ -470,17 +504,20 @@ while running:
                 pos, _ = raycast(eye, direction)
                 if pos and is_solid(*pos):
                     set_block(pos[0], pos[1], pos[2], None)
-                    cx,cz = get_chunk_pos(pos[0], pos[2])
-                    rebuild_neighbors(cx,cz)
+                    cx, cz = get_chunk_pos(pos[0], pos[2])
+                    rebuild_neighbors(cx, cz)
             elif event.button == 3:
                 pos, normal = raycast(eye, direction)
                 if pos and normal:
-                    nx,ny,nz = normal
-                    new_pos = (pos[0]+nx, pos[1]+ny, pos[2]+nz)
+                    nx, ny, nz = normal
+                    new_pos = (pos[0] + nx, pos[1] + ny, pos[2] + nz)
                     if not is_solid(*new_pos) and not player.intersects_block(*new_pos):
-                        set_block(new_pos[0], new_pos[1], new_pos[2], selected_block)
-                        cx,cz = get_chunk_pos(new_pos[0], new_pos[2])
-                        rebuild_neighbors(cx,cz)
+                        if selected_block == 'water':
+                            set_block(new_pos[0], new_pos[1], new_pos[2], 'water', 0)
+                        else:
+                            set_block(new_pos[0], new_pos[1], new_pos[2], selected_block)
+                        cx, cz = get_chunk_pos(new_pos[0], new_pos[2])
+                        rebuild_neighbors(cx, cz)
         elif event.type == KEYDOWN:
             if event.key == K_F1:
                 lock_mouse = not lock_mouse
@@ -502,9 +539,23 @@ while running:
                 selected_block = block_types[5]
             elif event.key == K_7:
                 selected_block = block_types[6]
+            elif event.key == K_8:
+                selected_block = block_types[7] if len(block_types) > 7 else selected_block
             elif event.key == K_ESCAPE:
                 running = False
 
+    # 物理固定步长（包括流体）：每 FLUID_DT 秒跑一次
+    fluid_time_acc += dt
+    while fluid_time_acc >= FLUID_DT:
+        if DEBUG_PROFILE:
+            t0 = time.time()
+            fluid_simulator.tick()
+            t1 = time.time()
+        else:
+            fluid_simulator.tick()
+        fluid_time_acc -= FLUID_DT
+
+    # 物理/玩家运动（基于 PHYSICS_DT 的子步）
     physics_accumulator += dt
     while physics_accumulator >= PHYSICS_DT:
         player.prev_x, player.prev_y, player.prev_z = player.x, player.y, player.z
@@ -512,23 +563,26 @@ while running:
         player.update(PHYSICS_DT, keys)
         physics_accumulator -= PHYSICS_DT
 
+    # 区块加载/生成逻辑（保留）
     update_chunk_load_levels(player.x, player.z, noise_gen, seed)
 
+    # 渲染插值
     alpha = min(1.0, max(0.0, physics_accumulator / PHYSICS_DT))
-    render_x = player.prev_x + (player.x - player.prev_x)*alpha
-    render_y = player.prev_y + (player.y - player.prev_y)*alpha
-    render_z = player.prev_z + (player.z - player.prev_z)*alpha
-    render_rot_x = player.prev_rot_x + (player.rot_x - player.prev_rot_x)*alpha
-    render_rot_y = player.prev_rot_y + (player.rot_y - player.prev_rot_y)*alpha
+    render_x = player.prev_x + (player.x - player.prev_x) * alpha
+    render_y = player.prev_y + (player.y - player.prev_y) * alpha
+    render_z = player.prev_z + (player.z - player.prev_z) * alpha
+    render_rot_x = player.prev_rot_x + (player.rot_x - player.prev_rot_x) * alpha
+    render_rot_y = player.prev_rot_y + (player.rot_y - player.prev_rot_y) * alpha
 
+    # 渲染
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
     glLoadIdentity()
     eye = (render_x, render_y + player.eye_height, render_z)
     pitch = math.radians(render_rot_x)
     yaw = math.radians(render_rot_y)
-    look_dir = (math.cos(pitch)*math.sin(yaw), math.sin(pitch), -math.cos(pitch)*math.cos(yaw))
-    look_at = (eye[0]+look_dir[0], eye[1]+look_dir[1], eye[2]+look_dir[2])
-    gluLookAt(eye[0], eye[1], eye[2], look_at[0], look_at[1], look_at[2], 0,1,0)
+    look_dir = (math.cos(pitch) * math.sin(yaw), math.sin(pitch), -math.cos(pitch) * math.cos(yaw))
+    look_at = (eye[0] + look_dir[0], eye[1] + look_dir[1], eye[2] + look_dir[2])
+    gluLookAt(eye[0], eye[1], eye[2], look_at[0], look_at[1], look_at[2], 0, 1, 0)
 
     render_chunks()
 
@@ -536,22 +590,22 @@ while running:
     physical_dir = player.look()
     hit_pos, _ = raycast(physical_eye, physical_dir)
     if hit_pos and is_solid(*hit_pos):
-        x,y,z = hit_pos
-        btype = get_block(x,y,z)
+        x, y, z = hit_pos
+        btype = get_block(x, y, z)
         if btype:
-            r,g,b = get_face_color(btype, (0,1,0))
-            dark = (r*0.5, g*0.5, b*0.5)
+            r, g, b = get_face_color(btype, (0, 1, 0))
+            dark = (r * 0.5, g * 0.5, b * 0.5)
             glPushMatrix()
-            glTranslatef(x,y,z)
-            glScalef(1.001,1.001,1.001)
+            glTranslatef(x, y, z)
+            glScalef(1.001, 1.001, 1.001)
             glEnable(GL_BLEND)
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
             glDisable(GL_DEPTH_TEST)
             glColor4f(dark[0], dark[1], dark[2], 0.6)
             glBegin(GL_TRIANGLES)
             for face in FACES:
-                for vx,vy,vz in face["verts"]:
-                    glVertex3f(vx,vy,vz)
+                for vx, vy, vz in face["verts"]:
+                    glVertex3f(vx, vy, vz)
             glEnd()
             glEnable(GL_DEPTH_TEST)
             glDisable(GL_BLEND)
