@@ -1,10 +1,24 @@
 # chunk_manager.py
-import numpy as np
+# Chunk management utilities used by main.py and world_gen.
+# Lazy VBO creation, protections to avoid GL access violations, and chunk data storage.
+
+import math
 import ctypes
+import numpy as np
 from OpenGL.GL import *
 from config import *
 
-# ---------- 立方体几何数据 ----------
+# Global storage for chunks: keys are (cx, cz) -> Chunk instance
+chunks = {}
+
+# Global rebuild queue (chunks needing mesh rebuild). Modules should add chunks here
+rebuild_queue = set()
+
+# Simple utility: chunk size (X,Z)
+CHUNK_SIZE_X = CHUNK_SIZE if 'CHUNK_SIZE' in globals() else 16
+CHUNK_SIZE_Z = CHUNK_SIZE if 'CHUNK_SIZE' in globals() else 16
+
+# Cube geometry helpers (used for line debug/outline generation)
 CUBE_VERTICES = [
     (-0.5, -0.5, -0.5), (0.5, -0.5, -0.5), (0.5, 0.5, -0.5), (-0.5, 0.5, -0.5),
     (-0.5, -0.5, 0.5), (0.5, -0.5, 0.5), (0.5, 0.5, 0.5), (-0.5, 0.5, 0.5)
@@ -14,19 +28,14 @@ CUBE_EDGES = [
     (4,5),(5,6),(6,7),(7,4),
     (0,4),(1,5),(2,6),(3,7)
 ]
+
 FACES = [
-    {"dir": (0,1,0), "verts": [(-0.5,0.5,-0.5),(0.5,0.5,-0.5),(0.5,0.5,0.5),
-                               (0.5,0.5,0.5),(-0.5,0.5,0.5),(-0.5,0.5,-0.5)]},
-    {"dir": (0,-1,0), "verts": [(-0.5,-0.5,0.5),(0.5,-0.5,0.5),(0.5,-0.5,-0.5),
-                                (0.5,-0.5,-0.5),(-0.5,-0.5,-0.5),(-0.5,-0.5,0.5)]},
-    {"dir": (1,0,0), "verts": [(0.5,-0.5,-0.5),(0.5,0.5,-0.5),(0.5,0.5,0.5),
-                               (0.5,0.5,0.5),(0.5,-0.5,0.5),(0.5,-0.5,-0.5)]},
-    {"dir": (-1,0,0), "verts": [(-0.5,-0.5,0.5),(-0.5,0.5,0.5),(-0.5,0.5,-0.5),
-                                (-0.5,0.5,-0.5),(-0.5,-0.5,-0.5),(-0.5,-0.5,0.5)]},
-    {"dir": (0,0,1), "verts": [(-0.5,-0.5,0.5),(0.5,-0.5,0.5),(0.5,0.5,0.5),
-                               (0.5,0.5,0.5),(-0.5,0.5,0.5),(-0.5,-0.5,0.5)]},
-    {"dir": (0,0,-1), "verts": [(0.5,-0.5,-0.5),(-0.5,-0.5,-0.5),(-0.5,0.5,-0.5),
-                                (-0.5,0.5,-0.5),(0.5,0.5,-0.5),(0.5,-0.5,-0.5)]},
+    {"dir": (0,1,0), "verts": [(-0.5,0.5,-0.5),(0.5,0.5,-0.5),(0.5,0.5,0.5),(0.5,0.5,0.5),(-0.5,0.5,0.5),(-0.5,0.5,-0.5)]},
+    {"dir": (0,-1,0), "verts": [(-0.5,-0.5,0.5),(0.5,-0.5,0.5),(0.5,-0.5,-0.5),(0.5,-0.5,-0.5),(-0.5,-0.5,-0.5),(-0.5,-0.5,0.5)]},
+    {"dir": (1,0,0), "verts": [(0.5,-0.5,-0.5),(0.5,0.5,-0.5),(0.5,0.5,0.5),(0.5,0.5,0.5),(0.5,-0.5,0.5),(0.5,-0.5,-0.5)]},
+    {"dir": (-1,0,0), "verts": [(-0.5,-0.5,0.5),(-0.5,0.5,0.5),(-0.5,0.5,-0.5),(-0.5,0.5,-0.5),(-0.5,-0.5,-0.5),(-0.5,-0.5,0.5)]},
+    {"dir": (0,0,1), "verts": [(-0.5,-0.5,0.5),(0.5,-0.5,0.5),(0.5,0.5,0.5),(0.5,0.5,0.5),(-0.5,0.5,0.5),(-0.5,-0.5,0.5)]},
+    {"dir": (0,0,-1), "verts": [(0.5,-0.5,-0.5),(-0.5,-0.5,-0.5),(-0.5,0.5,-0.5),(-0.5,0.5,-0.5),(0.5,0.5,-0.5),(0.5,-0.5,-0.5)]},
 ]
 
 def get_face_color(btype, face_dir):
@@ -34,46 +43,52 @@ def get_face_color(btype, face_dir):
         return BLOCK_COLORS['grass_block'] if face_dir == (0,1,0) else BLOCK_COLORS['dirt']
     return BLOCK_COLORS.get(btype, (0.5,0.5,0.5))
 
-# ---------- 全局区块字典 ----------
-chunks = {}
-
-def calculate_load_level(dist):
-    if dist <= 4:
-        return LOAD_LEVEL_ENTITY
-    elif dist <= 8:
-        return LOAD_LEVEL_BLOCK
-    elif dist <= RENDER_DIST:
-        return LOAD_LEVEL_FULL
-    elif dist <= LOAD_DIST:
-        return LOAD_LEVEL_INACCESSIBLE
-    else:
-        return LOAD_LEVEL_UNLOADED
-
 class Chunk:
     def __init__(self, cx, cz):
-        self.cx = cx
-        self.cz = cz
+        self.cx = int(cx)
+        self.cz = int(cz)
+
+        # sections: list of dicts mapping (lx, ly, lz) -> block_type
         self.sections = [{} for _ in range(NUM_SECTIONS)]
         self.biome_map = {}
         self.is_dirty = True
-        self.face_vbo = glGenBuffers(1)
-        self.line_vbo = glGenBuffers(1)
+
+        # Mesh / GL handles - lazy (created only when needed in GL context)
+        self.face_vbo = 0
+        self.line_vbo = 0
         self.face_count = 0
         self.line_count = 0
+
+        # Generation / load status
         self.generation_stage = 0
         self.is_generated = False
         self.load_level = LOAD_LEVEL_UNLOADED
-        self.fluid_levels = {}  # {(x,y,z): level} 存储水的深度 (0=源, 1-7=流动)
-        self.pending_fluids = set()  # 待更新的流体位置
+
+        # Fluid data
+        self.fluid_levels = {}  # {(wx,wy,wz): level}
+        self.pending_fluids = set()
+
+    def ensure_vbos(self):
+        """Create VBOs if not yet created. Must be called in a valid GL context."""
+        try:
+            if not self.face_vbo:
+                self.face_vbo = glGenBuffers(1)
+            if not self.line_vbo:
+                self.line_vbo = glGenBuffers(1)
+        except Exception as e:
+            # GL context may not be ready; keep handles 0 and let caller handle missing VBOs
+            print("[Chunk.ensure_vbos] GL exception (maybe context not ready):", e)
+            self.face_vbo = self.face_vbo or 0
+            self.line_vbo = self.line_vbo or 0
 
     def get_section_index(self, y):
-        y_abs = y + 64
+        y_abs = y - WORLD_BOTTOM
         if y_abs < 0 or y_abs >= CHUNK_HEIGHT:
             return None
         return y_abs // SECTION_HEIGHT
 
     def get_local_y(self, y):
-        y_abs = y + 64
+        y_abs = y - WORLD_BOTTOM
         return y_abs % SECTION_HEIGHT
 
     def get_block(self, wx, wy, wz):
@@ -88,7 +103,6 @@ class Chunk:
         return self.sections[sec_idx].get((lx, local_y, lz), None)
 
     def set_block(self, wx, wy, wz, block_type, fluid_level=None):
-        """设置方块，可选指定流体深度"""
         sec_idx = self.get_section_index(wy)
         if sec_idx is None:
             return
@@ -99,7 +113,6 @@ class Chunk:
             return
         if block_type is None:
             self.sections[sec_idx].pop((lx, local_y, lz), None)
-            # 移除流体数据
             self.fluid_levels.pop((wx, wy, wz), None)
             self.pending_fluids.discard((wx, wy, wz))
         else:
@@ -113,17 +126,27 @@ class Chunk:
                 self.fluid_levels.pop((wx, wy, wz), None)
                 self.pending_fluids.discard((wx, wy, wz))
         self.is_dirty = True
+        rebuild_queue.add(self)
 
     def get_fluid_level(self, wx, wy, wz):
         return self.fluid_levels.get((wx, wy, wz), -1)
 
     def rebuild_mesh(self):
+        """
+        Rebuild mesh for this chunk.
+        - Ensure VBOs exist in GL context.
+        - Build face and line vertex arrays only if there is geometry.
+        - Upload to GL and set counts. If upload fails, leave counts at 0 to avoid draw.
+        """
+        # Attempt to ensure buffers exist
+        self.ensure_vbos()
+
         face_vertices = []
         line_vertices = []
         for sec_idx, section in enumerate(self.sections):
             if not section:
                 continue
-            base_y = sec_idx * SECTION_HEIGHT - 64
+            base_y = sec_idx * SECTION_HEIGHT + WORLD_BOTTOM
             for (lx, ly, lz), btype in section.items():
                 wx = self.cx * CHUNK_SIZE + lx
                 wy = base_y + ly
@@ -141,54 +164,72 @@ class Chunk:
                         for idx in edge:
                             vx,vy,vz = CUBE_VERTICES[idx]
                             line_vertices.extend([wx+vx, wy+vy, wz+vz, 0.0,0.0,0.0])
+
+        # Upload faces
         if face_vertices:
             face_data = np.array(face_vertices, dtype=np.float32)
-            self.face_count = len(face_data)//6
-            glBindBuffer(GL_ARRAY_BUFFER, self.face_vbo)
-            glBufferData(GL_ARRAY_BUFFER, face_data.nbytes, face_data, GL_DYNAMIC_DRAW)
+            try:
+                glBindBuffer(GL_ARRAY_BUFFER, self.face_vbo)
+                glBufferData(GL_ARRAY_BUFFER, face_data.nbytes, face_data, GL_DYNAMIC_DRAW)
+                glBindBuffer(GL_ARRAY_BUFFER, 0)
+                self.face_count = len(face_data)//6
+            except Exception as e:
+                print("[Chunk.rebuild_mesh] GL upload failed for faces:", e)
+                self.face_count = 0
         else:
             self.face_count = 0
+
+        # Upload lines
         if line_vertices:
             line_data = np.array(line_vertices, dtype=np.float32)
-            self.line_count = len(line_data)//6
-            glBindBuffer(GL_ARRAY_BUFFER, self.line_vbo)
-            glBufferData(GL_ARRAY_BUFFER, line_data.nbytes, line_data, GL_DYNAMIC_DRAW)
+            try:
+                glBindBuffer(GL_ARRAY_BUFFER, self.line_vbo)
+                glBufferData(GL_ARRAY_BUFFER, line_data.nbytes, line_data, GL_DYNAMIC_DRAW)
+                glBindBuffer(GL_ARRAY_BUFFER, 0)
+                self.line_count = len(line_data)//6
+            except Exception as e:
+                print("[Chunk.rebuild_mesh] GL upload failed for lines:", e)
+                self.line_count = 0
         else:
             self.line_count = 0
-        glBindBuffer(GL_ARRAY_BUFFER, 0)
+
         self.is_dirty = False
         self.generation_stage = 7
         self.is_generated = True
 
-# ---------- 全局操作函数 ----------
+# Utilities
 def get_chunk(cx, cz):
-    key = (cx, cz)
-    if key not in chunks:
-        chunks[key] = Chunk(cx, cz)
-    return chunks[key]
+    key = (int(cx), int(cz))
+    c = chunks.get(key)
+    if c is None:
+        c = Chunk(cx, cz)
+        chunks[key] = c
+    return c
 
 def get_chunk_pos(wx, wz):
-    return wx // CHUNK_SIZE, wz // CHUNK_SIZE
-
-def set_block(wx, wy, wz, block_type, fluid_level=None):
-    """全局设置方块，支持流体深度"""
-    cx, cz = get_chunk_pos(wx, wz)
-    chunk = get_chunk(cx, cz)
-    chunk.set_block(wx, wy, wz, block_type, fluid_level)
-
-def is_solid(wx, wy, wz):
-    cx, cz = get_chunk_pos(wx, wz)
-    chunk = chunks.get((cx, cz))
-    if chunk is None:
-        return False
-    return chunk.get_block(wx, wy, wz) is not None
+    cx = math.floor(wx / CHUNK_SIZE)
+    cz = math.floor(wz / CHUNK_SIZE)
+    return int(cx), int(cz)
 
 def get_block(wx, wy, wz):
     cx, cz = get_chunk_pos(wx, wz)
     chunk = chunks.get((cx, cz))
-    if chunk is None:
+    if not chunk:
         return None
     return chunk.get_block(wx, wy, wz)
+
+def is_solid(wx, wy, wz):
+    b = get_block(wx, wy, wz)
+    if not b:
+        return False
+    if b == 'water':
+        return False
+    return True
+
+def set_block(wx, wy, wz, block_type, fluid_level=None):
+    cx, cz = get_chunk_pos(wx, wz)
+    chunk = get_chunk(cx, cz)
+    chunk.set_block(wx, wy, wz, block_type, fluid_level)
 
 def rebuild_chunk(cx, cz):
     chunk = chunks.get((cx, cz))
@@ -198,5 +239,40 @@ def rebuild_chunk(cx, cz):
 def rebuild_neighbors(cx, cz):
     for dx in (-1,0,1):
         for dz in (-1,0,1):
-            if (cx+dx, cz+dz) in chunks:
-                rebuild_chunk(cx+dx, cz+dz)
+            key = (cx+dx, cz+dz)
+            ch = chunks.get(key)
+            if ch:
+                ch.is_dirty = True
+                rebuild_queue.add(ch)
+
+def calculate_load_level(dist_or_cx, cz=None, player_x=None, player_z=None):
+    """Backwards compatible: either pass a distance or (cx,cz,player_x,player_z)."""
+    if cz is None and player_x is None and player_z is None:
+        d = int(dist_or_cx)
+        if d <= 4:
+            return LOAD_LEVEL_ENTITY
+        elif d <= 8:
+            return LOAD_LEVEL_BLOCK
+        elif d <= RENDER_DIST:
+            return LOAD_LEVEL_FULL
+        elif d <= LOAD_DIST:
+            return LOAD_LEVEL_INACCESSIBLE
+        else:
+            return LOAD_LEVEL_UNLOADED
+    cx = int(dist_or_cx)
+    cz = int(cz)
+    if player_x is None:
+        return LOAD_LEVEL_FULL
+    pcx = math.floor(player_x / CHUNK_SIZE)
+    pcz = math.floor(player_z / CHUNK_SIZE)
+    d = max(abs(cx - pcx), abs(cz - pcz))
+    if d <= 4:
+        return LOAD_LEVEL_ENTITY
+    elif d <= 8:
+        return LOAD_LEVEL_BLOCK
+    elif d <= RENDER_DIST:
+        return LOAD_LEVEL_FULL
+    elif d <= LOAD_DIST:
+        return LOAD_LEVEL_INACCESSIBLE
+    else:
+        return LOAD_LEVEL_UNLOADED

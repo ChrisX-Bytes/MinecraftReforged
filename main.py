@@ -379,7 +379,6 @@ def render_chunks():
     if DEBUG_PROFILE:
         rebuild_time = (time.time() - start_rebuild_time) * 1000.0 if start_rebuild_time else rebuild_ms_total
         # Show rebuild total time for this frame (approx)
-        print(f"[PROFILE] rebuilds={rebuilds}, rebuild_ms={rebuild_time:.1f}")
 
 def draw_crosshair():
     glPushMatrix()
