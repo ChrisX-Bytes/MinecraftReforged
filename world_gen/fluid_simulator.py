@@ -1,9 +1,13 @@
 # world_gen/fluid_simulator.py
 """
-Fluid simulator that follows Minecraft-like rules (bounded writes, snapshot sources, down-first, BFS spread).
+MC-style fluid simulator integrated with ScheduledTickManager:
+- scheduler.tick() provides positions scheduled for this tick (water ticks).
+- FluidSimulator.tick(scheduled_positions) processes those positions (and any pending positions),
+  performs down-first then BFS horizontal spread (max level = MAX_FLUID_LEVEL),
+  and applies up to updates_per_tick writes.
 """
 from collections import deque
-from config import MAX_FLUID_LEVEL, DEFAULT_UPDATES_PER_TICK, WATER_TICK_DELAY, LOAD_LEVEL_FULL
+from config import MAX_FLUID_LEVEL, DEFAULT_UPDATES_PER_TICK, LOAD_LEVEL_FULL
 from chunk_manager import get_block, set_block, get_chunk, chunks, is_solid, get_chunk_pos
 
 HDIRS = [(1,0), (-1,0), (0,1), (0,-1)]
@@ -12,15 +16,41 @@ class FluidSimulator:
     def __init__(self, updates_per_tick=DEFAULT_UPDATES_PER_TICK):
         self.updates_per_tick = updates_per_tick
 
-    def tick(self):
-        # Snapshot sources (level==0) within loaded chunks
+    def tick(self, scheduled_positions):
+        """
+        scheduled_positions: set of (wx,wy,wz) positions that scheduler says should be processed now.
+        We also consider chunk.pending_fluids to capture writes that were added but not scheduled.
+        """
+        # Consolidate candidate sources from scheduled positions and pending sets
         sources = set()
+
+        # 1) From scheduled_positions (explicitly scheduled)
+        if scheduled_positions:
+            for pos in scheduled_positions:
+                wx, wy, wz = pos
+                b = get_block(wx, wy, wz)
+                if b == 'water':
+                    # Only treat level==0 as source for horizontal BFS (we will rely on fluid_levels info in chunk)
+                    chx, chz = get_chunk_pos(wx, wz)
+                    ch = chunks.get((chx, chz))
+                    if ch:
+                        lvl = ch.get_fluid_level(wx, wy, wz)
+                        if lvl == 0:
+                            sources.add((wx, wy, wz))
+
+        # 2) Also include pending_fluids from loaded chunks (small set per chunk)
         for (cx, cz), chunk in list(chunks.items()):
             if getattr(chunk, 'load_level', LOAD_LEVEL_UNLOADED) > LOAD_LEVEL_FULL:
                 continue
-            for (wx, wy, wz), lvl in chunk.fluid_levels.items():
-                if lvl == 0:
-                    sources.add((wx, wy, wz))
+            if chunk.pending_fluids:
+                # inspect pending positions in this chunk
+                for (wx, wy, wz) in list(chunk.pending_fluids):
+                    b = get_block(wx, wy, wz)
+                    if b == 'water':
+                        lvl = chunk.get_fluid_level(wx, wy, wz)
+                        if lvl == 0:
+                            sources.add((wx, wy, wz))
+
         if not sources:
             return
 
@@ -29,7 +59,7 @@ class FluidSimulator:
         falling = {}
         touched = set()
 
-        # For each source, check horizontal neighbors and BFS
+        # BFS/propagate from each source (horizontal BFS limited by MAX_FLUID_LEVEL), down-first handled earlier
         for sx, sy, sz in sources:
             for dx, dz in HDIRS:
                 nx, ny, nz = sx + dx, sy, sz + dz
@@ -77,7 +107,7 @@ class FluidSimulator:
                             visited.add((nx2, nz2))
                             q.append((nx2, nz2, dist + 1))
 
-        # Falling check for existing water whose below is empty
+        # Also consider existing water that should fall (below is empty)
         for (cx, cz), chunk in list(chunks.items()):
             if getattr(chunk, 'load_level', LOAD_LEVEL_UNLOADED) > LOAD_LEVEL_FULL:
                 continue
@@ -104,7 +134,7 @@ class FluidSimulator:
             set_block(x, y, z, 'water', lvl)
             writes += 1
 
-        # then horizontal
+        # then horizontal (favor smaller levels for nicer visuals)
         items = sorted(target_levels.items(), key=lambda it: it[1])
         for (x,y,z), lvl in items:
             if writes >= self.updates_per_tick:
@@ -118,7 +148,7 @@ class FluidSimulator:
             set_block(x, y, z, 'water', lvl)
             writes += 1
 
-        # Ensure touched positions' chunks have pending marks
+        # Ensure touched positions' chunks have pending marks (set_block normally does this too)
         for (x,y,z) in touched:
             chx, chz = get_chunk_pos(x, z)
             ch = chunks.get((chx, chz))

@@ -1,6 +1,5 @@
 # chunk_manager.py
-# Chunk management utilities used by main.py and world_gen.
-# Lazy VBO creation, protections to avoid GL access violations, and chunk data storage.
+# Chunk management with pending fluid tracking and lazy VBOs.
 
 import math
 import ctypes
@@ -14,11 +13,7 @@ chunks = {}
 # Global rebuild queue (chunks needing mesh rebuild). Modules should add chunks here
 rebuild_queue = set()
 
-# Simple utility: chunk size (X,Z)
-CHUNK_SIZE_X = CHUNK_SIZE if 'CHUNK_SIZE' in globals() else 16
-CHUNK_SIZE_Z = CHUNK_SIZE if 'CHUNK_SIZE' in globals() else 16
-
-# Cube geometry helpers (used for line debug/outline generation)
+# Cube geometry helpers
 CUBE_VERTICES = [
     (-0.5, -0.5, -0.5), (0.5, -0.5, -0.5), (0.5, 0.5, -0.5), (-0.5, 0.5, -0.5),
     (-0.5, -0.5, 0.5), (0.5, -0.5, 0.5), (0.5, 0.5, 0.5), (-0.5, 0.5, 0.5)
@@ -67,6 +62,10 @@ class Chunk:
         # Fluid data
         self.fluid_levels = {}  # {(wx,wy,wz): level}
         self.pending_fluids = set()
+
+        # mesh versioning for future async mesh uploads
+        self.mesh_version = 0
+        self.last_uploaded_version = -1
 
     def ensure_vbos(self):
         """Create VBOs if not yet created. Must be called in a valid GL context."""
@@ -122,21 +121,29 @@ class Chunk:
                     fluid_level = 0
                 self.fluid_levels[(wx, wy, wz)] = fluid_level
                 self.pending_fluids.add((wx, wy, wz))
+                # Schedule water tick using global scheduler (import lazily to avoid circular import)
+                try:
+                    from world_gen.scheduler import scheduler
+                    scheduler.schedule((wx, wy, wz), WATER_TICK_DELAY)
+                except Exception:
+                    # scheduler might not be available during startup in some tests
+                    pass
             else:
                 self.fluid_levels.pop((wx, wy, wz), None)
                 self.pending_fluids.discard((wx, wy, wz))
         self.is_dirty = True
         rebuild_queue.add(self)
+        # bump mesh version to indicate geometry changed
+        self.mesh_version += 1
 
     def get_fluid_level(self, wx, wy, wz):
         return self.fluid_levels.get((wx, wy, wz), -1)
 
     def rebuild_mesh(self):
         """
-        Rebuild mesh for this chunk.
-        - Ensure VBOs exist in GL context.
-        - Build face and line vertex arrays only if there is geometry.
-        - Upload to GL and set counts. If upload fails, leave counts at 0 to avoid draw.
+        Rebuild mesh for this chunk (synchronous).
+        Keep this method for compatibility and debugging.
+        In the async path, workers will generate vertex arrays and main thread will upload them.
         """
         # Attempt to ensure buffers exist
         self.ensure_vbos()
