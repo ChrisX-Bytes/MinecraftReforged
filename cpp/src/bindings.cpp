@@ -12,6 +12,8 @@ PYBIND11_MODULE(minecraft_core, m) {
         .def("getBlock", &SubChunk::getBlock)
         .def("setBlock", &SubChunk::setBlock)
         .def("isDirty", &SubChunk::isDirty)
+        .def("markDirty", &SubChunk::markDirty)
+        .def("clearDirty", &SubChunk::clearDirty)
         .def("buildMesh", &SubChunk::buildMesh)
         .def_readwrite("faceVBO", &SubChunk::faceVBO)
         .def_readwrite("lineVBO", &SubChunk::lineVBO)
@@ -24,6 +26,7 @@ PYBIND11_MODULE(minecraft_core, m) {
         .def("getSubChunk", &Chunk::getSubChunk, py::return_value_policy::reference)
         .def("rebuildDirtySubChunks", &Chunk::rebuildDirtySubChunks)
         .def_readwrite("loadLevel", &Chunk::loadLevel)
+        .def_readwrite("isGenerated", &Chunk::isGenerated)
         .def_readwrite("fluidLevels", &Chunk::fluidLevels)
         .def_readwrite("pendingFluids", &Chunk::pendingFluids);
 

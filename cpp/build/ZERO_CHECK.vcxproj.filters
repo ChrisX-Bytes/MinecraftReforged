@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="18.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\Chris\Documents\Chris\Project\MinecraftReforged\cpp\build\CMakeFiles\011053e8258a2bff4ce9f9f4a7ceadcb\generate.stamp.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{A5D681D5-536D-3F72-8644-F5FBC65CE45A}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

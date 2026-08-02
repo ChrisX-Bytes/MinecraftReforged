@@ -5,7 +5,6 @@
 #include "subchunk.h"
 #include "block_ids.h"
 
-constexpr int NUM_SECTIONS = 24; // 384 / 16
 
 class Chunk {
 public:

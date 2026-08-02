@@ -22,9 +22,7 @@ from chunk_manager import (
 from world_gen import generate_chunk, generate_chunk_to_level, update_chunk_load_levels
 from world_gen.noise import PerlinNoise3D
 # Fluid simulator now uses C++ core, but we keep Python wrapper for compatibility
-from world_gen.fluid_simulator import FluidSimulator
 from world_gen.scheduler import scheduler
-
 import minecraft_core as mc
 
 # ---------- 调试开关 ----------
@@ -295,11 +293,18 @@ player = Player()
 # find spawn y
 for y in range(100, -64, -1):
     if is_solid(0, y, 0):
-        player.y = y + 1
+        # player.y = y + 1
+        player.y = 80
         break
-player.x, player.z = 0, 0
-player.spawn_x, player.spawn_y, player.spawn_z = player.x, player.y, player.z
-player.prev_x, player.prev_y, player.prev_z = player.x, player.y, player.z
+spawn_x, spawn_z = 0, 0
+spawn_y = 150
+while spawn_y > -64:
+    if is_solid(spawn_x, spawn_y, spawn_z):
+        player.y = spawn_y + 1
+        break
+    spawn_y -= 1
+else:
+    player.y = 90  # 回退
 
 # ---------- 射线投射 (unchanged) ----------
 def raycast(origin, direction, max_dist=10):
@@ -345,46 +350,27 @@ def raycast(origin, direction, max_dist=10):
 
 # ---------- 渲染（使用子区块 VBO 由 C++ 管理） ----------
 def render_chunks():
-    # 重建脏子区块（由 C++ 处理，但我们仍然调用 rebuild_mesh 以触发 C++ 重建）
-    # 由于 C++ 内部管理脏标记，我们只需确保在绘制前重建完成。
-    # 我们可以选择每帧重建所有脏子区块（C++ 快速），但为了控制帧率，限制数量。
-    # 这里我们简单调用 chunk.rebuild_mesh() 对所有区块，但 C++ 只会重建脏的子区块。
-    # 为了限制性能，我们可以限制每帧处理的区块数量。
-    processed = 0
+    # 先重建所有脏区块
     for chunk in list(chunks.values()):
         if chunk.load_level > LOAD_LEVEL_FULL:
             continue
-        if processed >= REBUILDS_PER_FRAME:
-            break
         chunk.rebuild_mesh()
-        processed += 1
 
     # 绘制所有可见区块的子区块
     for chunk in list(chunks.values()):
         if chunk.load_level > LOAD_LEVEL_FULL:
             continue
-        # 遍历 24 个子区块
         for idx in range(NUM_SECTIONS):
             sub = chunk.get_subchunk(idx)
             if sub is None:
                 continue
-            # 绘制面
-            if sub.faceCount > 0:
+            if sub.faceCount > 0 and sub.faceVBO != 0:
                 glBindBuffer(GL_ARRAY_BUFFER, sub.faceVBO)
                 glEnableClientState(GL_VERTEX_ARRAY)
                 glEnableClientState(GL_COLOR_ARRAY)
                 glVertexPointer(3, GL_FLOAT, 24, ctypes.c_void_p(0))
                 glColorPointer(3, GL_FLOAT, 24, ctypes.c_void_p(12))
                 glDrawArrays(GL_TRIANGLES, 0, sub.faceCount)
-                glDisableClientState(GL_VERTEX_ARRAY)
-                glDisableClientState(GL_COLOR_ARRAY)
-            if sub.lineCount > 0:
-                glBindBuffer(GL_ARRAY_BUFFER, sub.lineVBO)
-                glEnableClientState(GL_VERTEX_ARRAY)
-                glEnableClientState(GL_COLOR_ARRAY)
-                glVertexPointer(3, GL_FLOAT, 24, ctypes.c_void_p(0))
-                glColorPointer(3, GL_FLOAT, 24, ctypes.c_void_p(12))
-                glDrawArrays(GL_LINES, 0, sub.lineCount)
                 glDisableClientState(GL_VERTEX_ARRAY)
                 glDisableClientState(GL_COLOR_ARRAY)
     glBindBuffer(GL_ARRAY_BUFFER, 0)

@@ -1,6 +1,6 @@
 # chunk_manager.py
 # Chunk management using C++ core (minecraft_core).
-# All data is stored in C++ objects; Python acts as wrapper.
+# C++ generates vertex data, Python uploads to VBO.
 
 import math
 import ctypes
@@ -9,16 +9,36 @@ from OpenGL.GL import *
 from config import *
 import minecraft_core as mc
 
-# Global storage for chunks: keys are (cx, cz) -> Chunk wrapper
+# ---------- 几何辅助（供渲染使用，与 C++ 核心无关） ----------
+CUBE_VERTICES = [
+    (-0.5, -0.5, -0.5), (0.5, -0.5, -0.5), (0.5, 0.5, -0.5), (-0.5, 0.5, -0.5),
+    (-0.5, -0.5, 0.5), (0.5, -0.5, 0.5), (0.5, 0.5, 0.5), (-0.5, 0.5, 0.5)
+]
+CUBE_EDGES = [
+    (0,1),(1,2),(2,3),(3,0),
+    (4,5),(5,6),(6,7),(7,4),
+    (0,4),(1,5),(2,6),(3,7)
+]
+
+FACES = [
+    {"dir": (0,1,0), "verts": [(-0.5,0.5,-0.5),(0.5,0.5,-0.5),(0.5,0.5,0.5),(0.5,0.5,0.5),(-0.5,0.5,0.5),(-0.5,0.5,-0.5)]},
+    {"dir": (0,-1,0), "verts": [(-0.5,-0.5,0.5),(0.5,-0.5,0.5),(0.5,-0.5,-0.5),(0.5,-0.5,-0.5),(-0.5,-0.5,-0.5),(-0.5,-0.5,0.5)]},
+    {"dir": (1,0,0), "verts": [(0.5,-0.5,-0.5),(0.5,0.5,-0.5),(0.5,0.5,0.5),(0.5,0.5,0.5),(0.5,-0.5,0.5),(0.5,-0.5,-0.5)]},
+    {"dir": (-1,0,0), "verts": [(-0.5,-0.5,0.5),(-0.5,0.5,0.5),(-0.5,0.5,-0.5),(-0.5,0.5,-0.5),(-0.5,-0.5,-0.5),(-0.5,-0.5,0.5)]},
+    {"dir": (0,0,1), "verts": [(-0.5,-0.5,0.5),(0.5,-0.5,0.5),(0.5,0.5,0.5),(0.5,0.5,0.5),(-0.5,0.5,0.5),(-0.5,-0.5,0.5)]},
+    {"dir": (0,0,-1), "verts": [(0.5,-0.5,-0.5),(-0.5,-0.5,-0.5),(-0.5,0.5,-0.5),(-0.5,0.5,-0.5),(0.5,0.5,-0.5),(0.5,-0.5,-0.5)]},
+]
+
+def get_face_color(btype, face_dir):
+    if btype == 'grass_block':
+        return BLOCK_COLORS['grass_block'] if face_dir == (0,1,0) else BLOCK_COLORS['dirt']
+    return BLOCK_COLORS.get(btype, (0.5,0.5,0.5))
+
+# ---------- C++ 核心封装 ----------
 chunks = {}
-
-# Global rebuild queue (for compatibility, but C++ handles dirty sections)
 rebuild_queue = set()
-
-# Global C++ World instance (initialized in main.py)
 world = None
 
-# Block type to ID mapping (must match C++ block_ids.h)
 BLOCK_ID_MAP = {
     'air': 0,
     'stone': 1,
@@ -30,11 +50,9 @@ BLOCK_ID_MAP = {
     'snow': 7,
     'bedrock': 8,
     'water': 9,
-    # Add more as needed
 }
 
 def init_world():
-    """Initialize C++ World instance. Call once at startup."""
     global world
     if world is None:
         world = mc.World()
@@ -54,16 +72,16 @@ class Chunk:
     def __init__(self, cx, cz):
         self.cx = int(cx)
         self.cz = int(cz)
-        # C++ Chunk object (created or retrieved from World)
         self.cpp_chunk = world.getChunk(cx, cz)
-        # Keep compatibility attributes
-        self.is_dirty = False  # Not used; dirty tracked per subchunk in C++
+        self.is_dirty = False
         self.face_vbo = 0
         self.line_vbo = 0
         self.face_count = 0
         self.line_count = 0
-        # load level is stored in C++ but we mirror it here for compatibility
         self.load_level = self.cpp_chunk.loadLevel
+        self._is_generated = False
+        self._generation_stage = 0
+        self.biome_map = {}
 
     def get_block(self, wx, wy, wz):
         bid = self.cpp_chunk.getBlock(wx, wy, wz)
@@ -73,43 +91,55 @@ class Chunk:
         bid = get_block_id(block_type)
         self.cpp_chunk.setBlock(wx, wy, wz, bid)
         if block_type == 'water':
-            # Compress coordinates into 64-bit key (simple shift)
             pos = (wx << 40) | (wy << 20) | wz
-            # Ask fluid simulator to activate this source (fluid_sim is global)
-            # We'll call fluid_sim.setSource in main.py via a global reference
-            # For now, we just mark pending fluid in C++ chunk
             self.cpp_chunk.pendingFluids.add(pos)
-        # C++ will handle dirty marking; we just need to add to rebuild_queue for compatibility
         rebuild_queue.add(self)
 
     def rebuild_mesh(self):
-        """Rebuild all dirty subchunks by calling C++ rebuildDirtySubChunks."""
-        self.cpp_chunk.rebuildDirtySubChunks()
-        # After rebuild, we need to upload VBO data? Actually C++ updates VBOs inside.
-        # But Python still needs to know face counts for each subchunk.
-        # We'll read them from C++ subchunks when rendering.
-        # No need to do anything here.
-        pass
+        # 1. 强制所有子区块标记为脏
+        for idx in range(NUM_SECTIONS):
+            sub = self.cpp_chunk.getSubChunk(idx)
+            if sub:
+                sub.markDirty()
+
+        # 2. 重建所有脏子区块
+        for idx in range(NUM_SECTIONS):
+            sub = self.cpp_chunk.getSubChunk(idx)
+            if sub is None:
+                continue
+            if sub.isDirty():
+                verts = sub.buildMesh()
+                if verts:
+                    if sub.faceVBO == 0:
+                        sub.faceVBO = glGenBuffers(1)
+                    data = np.array(verts, dtype=np.float32)
+                    glBindBuffer(GL_ARRAY_BUFFER, sub.faceVBO)
+                    glBufferData(GL_ARRAY_BUFFER, data.nbytes, data, GL_DYNAMIC_DRAW)
+                    glBindBuffer(GL_ARRAY_BUFFER, 0)
+                    sub.faceCount = len(verts) // 6
+                    # 打印调试（可选）
+                    # print(f"SubChunk {idx} faceCount = {sub.faceCount}")
+                else:
+                    sub.faceCount = 0
 
     def get_subchunk(self, idx):
         return self.cpp_chunk.getSubChunk(idx)
 
-    # Compatibility properties
     @property
     def is_generated(self):
-        return self.cpp_chunk.isGenerated
+        return self._is_generated
 
     @is_generated.setter
     def is_generated(self, value):
-        self.cpp_chunk.isGenerated = value
+        self._is_generated = value
 
     @property
     def generation_stage(self):
-        return 7 if self.is_generated else 0
+        return self._generation_stage
 
     @generation_stage.setter
     def generation_stage(self, value):
-        pass  # ignore
+        self._generation_stage = value
 
     @property
     def load_level(self):
@@ -120,13 +150,9 @@ class Chunk:
         self.cpp_chunk.loadLevel = value
 
     def get_fluid_level(self, wx, wy, wz):
-        # For now, we don't store fluid levels in Python; they are in C++ Chunk.
-        # We'll need to add a method to Chunk to retrieve fluid level.
-        # Simulate by returning -1 if not found.
         return -1
 
-# ---------- Utility functions (mostly unchanged but using C++ world) ----------
-
+# ---------- Utility functions ----------
 def get_chunk(cx, cz):
     key = (int(cx), int(cz))
     c = chunks.get(key)
@@ -171,7 +197,6 @@ def rebuild_neighbors(cx, cz):
             key = (cx+dx, cz+dz)
             ch = chunks.get(key)
             if ch:
-                # Mark all subchunks dirty in C++
                 for i in range(NUM_SECTIONS):
                     sub = ch.get_subchunk(i)
                     if sub:
@@ -179,7 +204,6 @@ def rebuild_neighbors(cx, cz):
                 rebuild_queue.add(ch)
 
 def calculate_load_level(dist_or_cx, cz=None, player_x=None, player_z=None):
-    # same as original, unchanged
     if cz is None and player_x is None and player_z is None:
         d = int(dist_or_cx)
         if d <= 4:
