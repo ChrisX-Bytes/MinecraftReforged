@@ -32,7 +32,6 @@ def apply_biomes(cx, cz, noise_gen, seed):
 
 
 def generate_chunk_terrain(cx, cz, noise_gen, seed):
-    """第5步：噪声（地形骨架 + 静态水初始化）"""
     chunk = get_chunk(cx, cz)
     if chunk.generation_stage < 1:
         apply_biomes(cx, cz, noise_gen, seed)
@@ -41,34 +40,34 @@ def generate_chunk_terrain(cx, cz, noise_gen, seed):
     base_x = cx * CHUNK_SIZE
     base_z = cz * CHUNK_SIZE
 
-    # 第一遍：生成石头，记录地表高度
-    column_top = {}
+    # 只遍历 x,z 列，计算每列的地表高度，然后填充从底部到地表
     for lx in range(CHUNK_SIZE):
         for lz in range(CHUNK_SIZE):
             wx = base_x + lx
             wz = base_z + lz
             if abs(wx) > WORLD_RADIUS or abs(wz) > WORLD_RADIUS:
                 continue
+            # 从高处往下找地表高度
             top_y = WORLD_BOTTOM - 1
-            for wy in range(WORLD_BOTTOM, WORLD_TOP):
+            for wy in range(WORLD_TOP - 1, WORLD_BOTTOM - 1, -1):
                 density = final_density(wx, wy, wz, noise_gen, seed)
                 if density > 0:
-                    set_block(wx, wy, wz, 'stone')
                     top_y = wy
-            column_top[(lx, lz)] = top_y
+                    break
+            # 如果找到地表（top_y > WORLD_BOTTOM-1），则从底部到地表填充石头
+            if top_y > WORLD_BOTTOM - 1:
+                for wy in range(WORLD_BOTTOM, top_y + 1):
+                    set_block(wx, wy, wz, 'stone')
 
-    # 第二遍：初始化水源（只放源方块，让流动系统处理扩散）
+    # 初始化水源（海平面）
     for lx in range(CHUNK_SIZE):
         for lz in range(CHUNK_SIZE):
             wx = base_x + lx
             wz = base_z + lz
             if abs(wx) > WORLD_RADIUS or abs(wz) > WORLD_RADIUS:
                 continue
-            top_y = column_top.get((lx, lz), WORLD_BOTTOM - 1)
-            if top_y < 63:  # 地表低于海平面
-                # 在海平面位置放置水源（深度0），并标记需要更新
+            if top_y < 63:
                 set_block(wx, 63, wz, 'water', 0)
-                # 注意：流动由 fluid_simulator 处理，这里不手动填充
 
     chunk.generation_stage = 2
     chunk.is_dirty = True

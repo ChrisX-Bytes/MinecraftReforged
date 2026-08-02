@@ -122,6 +122,8 @@ def draw_loading(progress):
 
 # ---------- 初始世界生成（使用 C++ setBlock） ----------
 def generate_initial_world():
+    global chunks
+    chunks.clear()
     seed = 114514
     noise_gen = PerlinNoise3D(seed=seed)
     start_cx, start_cz = 0, 0
@@ -297,14 +299,16 @@ for y in range(100, -64, -1):
         player.y = 80
         break
 spawn_x, spawn_z = 0, 0
-spawn_y = 150
+spawn_y = 120
 while spawn_y > -64:
     if is_solid(spawn_x, spawn_y, spawn_z):
         player.y = spawn_y + 1
         break
     spawn_y -= 1
 else:
-    player.y = 90  # 回退
+    player.y = 80
+player.x, player.z = spawn_x, spawn_z
+player.spawn_x, player.spawn_y, player.spawn_z = player.x, player.y, player.z
 
 # ---------- 射线投射 (unchanged) ----------
 def raycast(origin, direction, max_dist=10):
