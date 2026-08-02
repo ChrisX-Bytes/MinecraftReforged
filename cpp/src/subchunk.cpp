@@ -1,7 +1,9 @@
 #include "subchunk.h"
 #include <cmath>
 
-SubChunk::SubChunk(int yBase_) : yBase(yBase_), dirty(true) {
+void SubChunk::init(int yBase_) {
+    yBase = yBase_;
+    dirty = true;
     blocks.fill(BLOCK_AIR);
 }
 
@@ -20,12 +22,12 @@ void SubChunk::setBlock(int lx, int ly, int lz, BlockID id) {
     dirty = true;
 }
 
-std::vector<float> SubChunk::buildMesh(bool includeLines) const {
-    std::vector<float> vertices;
-    // 这里简化实现：遍历所有方块，对每个面判断邻居是否透明
-    // 实际应使用与之前Python类似的FACES，但为了速度，我们直接在C++中定义
-    // 由于代码量较大，这里仅给出框架，您可以根据之前的Python逻辑实现
-    // 返回的顶点格式: [x,y,z, r,g,b, x,y,z, r,g,b, ...]
-    // 示例：暂时返回空
-    return vertices;
+std::vector<float> SubChunk::buildMesh() {
+    // 暂时只清除脏标记，返回空向量
+    // 实际应遍历 blocks，生成顶点数据并上传到 VBO
+    dirty = false;
+    // 这里可以设置 faceCount 和 lineCount 为 0，防止绘制
+    faceCount = 0;
+    lineCount = 0;
+    return std::vector<float>();
 }
