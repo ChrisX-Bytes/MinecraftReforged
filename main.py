@@ -4,7 +4,6 @@ from pygame.locals import *
 from OpenGL.GL import *
 from OpenGL.GLU import *
 import math
-import random
 import sys
 import os
 import warnings
@@ -17,21 +16,34 @@ from config import *
 from chunk_manager import (
     chunks, get_chunk, set_block, get_block, is_solid,
     rebuild_chunk, rebuild_neighbors, Chunk, get_chunk_pos,
-    calculate_load_level, FACES, get_face_color, rebuild_queue
+    calculate_load_level, FACES, get_face_color, rebuild_queue,
+    init_world, world
 )
 from world_gen import generate_chunk, generate_chunk_to_level, update_chunk_load_levels
 from world_gen.noise import PerlinNoise3D
+# Fluid simulator now uses C++ core, but we keep Python wrapper for compatibility
 from world_gen.fluid_simulator import FluidSimulator
 from world_gen.scheduler import scheduler
 
-# ---------- 调试开关 ----------
-DEBUG_PROFILE = True  # 打开后会打印流体 tick/ms 和每帧重建耗时，调试时开启，稳定后建议关闭
+import minecraft_core as mc
 
-# ---------- 初始化 ----------
+# ---------- 调试开关 ----------
+DEBUG_PROFILE = False  # 关闭调试输出
+
+# ---------- 初始化 C++ 核心 ----------
+init_world()  # creates mc.World instance
+
+# ---------- 流体模拟器（使用 C++ 版本） ----------
+# We'll use the C++ FluidSimulator directly.
+fluid_sim = mc.FluidSimulator(DEFAULT_UPDATES_PER_TICK)
+# Note: C++ fluid simulator uses its own scheduler, but we also have Python scheduler for compatibility.
+# We'll keep both and let C++ handle main fluid logic.
+
+# ---------- 初始化 Pygame/OpenGL ----------
 pygame.init()
 display = (1024, 768)
 screen = pygame.display.set_mode(display, DOUBLEBUF | OPENGL)
-pygame.display.set_caption('3D Minecraft - Reforged')
+pygame.display.set_caption('3D Minecraft - Reforged (C++ Core)')
 pygame.mouse.set_visible(False)
 pygame.event.set_grab(True)
 
@@ -44,16 +56,13 @@ gluPerspective(70, display[0] / display[1], 0.1, 100.0)
 glMatrixMode(GL_MODELVIEW)
 glClearColor(0.53, 0.81, 0.92, 1.0)
 
-# ---------- 流体与性能参数（可调整） ----------
-FLUID_TPS = 20.0                     # 逻辑 tick 频率（ticks per second）
+# ---------- 参数 ----------
+FLUID_TPS = 20.0   # C++ handles scheduling at 20 TPS; we still need to call tick()
 FLUID_DT = 1.0 / FLUID_TPS
 fluid_time_acc = 0.0
 
-# 每个逻辑 tick 最多允许的写操作（set_block），防止单次 tick 写太多触发大量重建
-fluid_simulator = FluidSimulator(updates_per_tick=DEFAULT_UPDATES_PER_TICK)
-
-# 每帧最多重建的区块数量（避免 glBufferData 峰值）
-REBUILDS_PER_FRAME = REBUILDS_PER_FRAME_DEFAULT if 'REBUILDS_PER_FRAME_DEFAULT' in globals() else 2
+# Rebuild per frame (C++ handles subchunk rebuilds, but we limit frames for drawing)
+REBUILDS_PER_FRAME = 10  # can be larger since C++ is fast
 
 # ---------- 字体 ----------
 FONT_PATH = "./File/minecraftfont.woff"
@@ -71,8 +80,9 @@ fps_time = pygame.time.get_ticks()
 fps_display = 0
 selected_block = 'grass_block'
 
-# ---------- 加载动画 ----------
+# ---------- 加载动画 (unchanged) ----------
 def draw_loading(progress):
+    # same as original
     glPushAttrib(GL_ALL_ATTRIB_BITS)
     glMatrixMode(GL_PROJECTION)
     glPushMatrix()
@@ -112,7 +122,7 @@ def draw_loading(progress):
     glPopAttrib()
     glEnable(GL_DEPTH_TEST)
 
-# ---------- 初始世界生成（分帧，避免阻塞事件循环） ----------
+# ---------- 初始世界生成（使用 C++ setBlock） ----------
 def generate_initial_world():
     seed = 114514
     noise_gen = PerlinNoise3D(seed=seed)
@@ -121,8 +131,7 @@ def generate_initial_world():
     generated = 0
     draw_loading(0.0)
 
-    # 分帧生成：每次只做一小批 chunk，然后处理事件、短等待
-    batch_size = 4  # 每次循环处理的 chunk 数；可根据机器调节
+    batch_size = 4
     coords = [(start_cx + dx, start_cz + dz)
               for dx in range(-RENDER_DIST, RENDER_DIST + 1)
               for dz in range(-RENDER_DIST, RENDER_DIST + 1)]
@@ -134,40 +143,17 @@ def generate_initial_world():
             if i >= total:
                 break
             cx, cz = coords[i]
-            generate_chunk(cx, cz, noise_gen, seed)
+            generate_chunk(cx, cz, noise_gen, seed)  # this uses set_block -> C++
             generated += 1
             i += 1
-        # 更新加载进度显示
         draw_loading(generated / total_chunks)
-        # 处理事件以保持窗口响应
-        for event in pygame.event.get():
-            if event.type == QUIT:
-                pygame.quit(); sys.exit()
-        # 微等待，释放时间片
-        pygame.time.wait(1)
-
-    # 分帧生成低优先级加载 (LOAD_DIST)
-    coords2 = [(start_cx + dx, start_cz + dz)
-               for dx in range(-LOAD_DIST, LOAD_DIST + 1)
-               for dz in range(-LOAD_DIST, LOAD_DIST + 1)]
-    j = 0
-    total2 = len(coords2)
-    batch2 = 4
-    while j < total2:
-        for _ in range(batch2):
-            if j >= total2:
-                break
-            cx, cz = coords2[j]
-            if (cx, cz) not in chunks:
-                chunk = get_chunk(cx, cz)
-                generate_chunk_to_level(cx, cz, noise_gen, seed, LOAD_LEVEL_INACCESSIBLE)
-            j += 1
-        draw_loading((generated + j) / (total_chunks + total2))
         for event in pygame.event.get():
             if event.type == QUIT:
                 pygame.quit(); sys.exit()
         pygame.time.wait(1)
 
+    # Also generate INACCESSIBLE chunks in LOAD_DIST (optional, can be done later)
+    # We'll skip to save startup time; they'll be generated on demand.
     glBindBuffer(GL_ARRAY_BUFFER, 0)
     glDisableClientState(GL_VERTEX_ARRAY)
     glDisableClientState(GL_COLOR_ARRAY)
@@ -183,7 +169,7 @@ def generate_initial_world():
 
 noise_gen, seed = generate_initial_world()
 
-# ---------- 玩家 ----------
+# ---------- 玩家类 (unchanged) ----------
 class Player:
     def __init__(self):
         self.x, self.y, self.z = 0, 65, 0
@@ -240,8 +226,6 @@ class Player:
         self.vy -= 32 * dt
         if self.vy < -78.4:
             self.vy = -78.4
-
-        start_x, start_y, start_z = self.x, self.y, self.z
 
         new_y = self.y + self.vy * dt
         self.on_ground = False
@@ -308,18 +292,16 @@ class Player:
         return not (pmaxx <= bminx or pminx >= bmaxx or pmaxy <= bminy or pminy >= bmaxy or pmaxz <= bminz or pminz >= bmaxz)
 
 player = Player()
-
-# 放置玩家到正确位置
-spawn_x, spawn_z = 0, 0
+# find spawn y
 for y in range(100, -64, -1):
-    if is_solid(spawn_x, y, spawn_z):
+    if is_solid(0, y, 0):
         player.y = y + 1
         break
-player.x, player.z = spawn_x, spawn_z
+player.x, player.z = 0, 0
 player.spawn_x, player.spawn_y, player.spawn_z = player.x, player.y, player.z
 player.prev_x, player.prev_y, player.prev_z = player.x, player.y, player.z
 
-# ---------- 射线投射 ----------
+# ---------- 射线投射 (unchanged) ----------
 def raycast(origin, direction, max_dist=10):
     dx, dy, dz = direction
     length = math.hypot(dx, dy, dz)
@@ -361,56 +343,55 @@ def raycast(origin, direction, max_dist=10):
             normal = (0, 0, -step_z)
     return None, None
 
-# ---------- 渲染（含受限重建） ----------
+# ---------- 渲染（使用子区块 VBO 由 C++ 管理） ----------
 def render_chunks():
-    start_rebuild_time = time.time() if DEBUG_PROFILE else None
-    pcx, pcz = get_chunk_pos(player.x, player.z)
-    items = list(chunks.items())
-    # 优先靠近玩家的区块先重建 (nearest first)
-    items.sort(key=lambda it: max(abs(it[0][0] - pcx), abs(it[0][1] - pcz)))
-    rebuilds = 0
-    rebuild_ms_total = 0.0
-    for (cx, cz), chunk in items:
+    # 重建脏子区块（由 C++ 处理，但我们仍然调用 rebuild_mesh 以触发 C++ 重建）
+    # 由于 C++ 内部管理脏标记，我们只需确保在绘制前重建完成。
+    # 我们可以选择每帧重建所有脏子区块（C++ 快速），但为了控制帧率，限制数量。
+    # 这里我们简单调用 chunk.rebuild_mesh() 对所有区块，但 C++ 只会重建脏的子区块。
+    # 为了限制性能，我们可以限制每帧处理的区块数量。
+    processed = 0
+    for chunk in list(chunks.values()):
         if chunk.load_level > LOAD_LEVEL_FULL:
             continue
-        if chunk.is_dirty:
-            if rebuilds < REBUILDS_PER_FRAME:
-                if DEBUG_PROFILE:
-                    t0 = time.time()
-                    chunk.rebuild_mesh()
-                    t1 = time.time()
-                    rebuild_ms_total += (t1 - t0) * 1000.0
-                else:
-                    chunk.rebuild_mesh()
-                rebuilds += 1
-            else:
-                # defer rebuild to later frames
-                continue
-        if chunk.face_count > 0:
-            glBindBuffer(GL_ARRAY_BUFFER, chunk.face_vbo)
-            glEnableClientState(GL_VERTEX_ARRAY)
-            glEnableClientState(GL_COLOR_ARRAY)
-            glVertexPointer(3, GL_FLOAT, 24, ctypes.c_void_p(0))
-            glColorPointer(3, GL_FLOAT, 24, ctypes.c_void_p(12))
-            glDrawArrays(GL_TRIANGLES, 0, chunk.face_count)
-            glDisableClientState(GL_VERTEX_ARRAY)
-            glDisableClientState(GL_COLOR_ARRAY)
-        if chunk.line_count > 0:
-            glBindBuffer(GL_ARRAY_BUFFER, chunk.line_vbo)
-            glEnableClientState(GL_VERTEX_ARRAY)
-            glEnableClientState(GL_COLOR_ARRAY)
-            glVertexPointer(3, GL_FLOAT, 24, ctypes.c_void_p(0))
-            glColorPointer(3, GL_FLOAT, 24, ctypes.c_void_p(12))
-            glDrawArrays(GL_LINES, 0, chunk.line_count)
-            glDisableClientState(GL_VERTEX_ARRAY)
-            glDisableClientState(GL_COLOR_ARRAY)
-    glBindBuffer(GL_ARRAY_BUFFER, 0)
-    if DEBUG_PROFILE:
-        rebuild_time = (time.time() - start_rebuild_time) * 1000.0 if start_rebuild_time else rebuild_ms_total
-        # Show rebuild total time for this frame (approx)
-        print(f"[PROFILE] rebuilds={rebuilds}, rebuild_ms={rebuild_time:.1f}")
+        if processed >= REBUILDS_PER_FRAME:
+            break
+        chunk.rebuild_mesh()
+        processed += 1
 
+    # 绘制所有可见区块的子区块
+    for chunk in list(chunks.values()):
+        if chunk.load_level > LOAD_LEVEL_FULL:
+            continue
+        # 遍历 24 个子区块
+        for idx in range(NUM_SECTIONS):
+            sub = chunk.get_subchunk(idx)
+            if sub is None:
+                continue
+            # 绘制面
+            if sub.faceCount > 0:
+                glBindBuffer(GL_ARRAY_BUFFER, sub.faceVBO)
+                glEnableClientState(GL_VERTEX_ARRAY)
+                glEnableClientState(GL_COLOR_ARRAY)
+                glVertexPointer(3, GL_FLOAT, 24, ctypes.c_void_p(0))
+                glColorPointer(3, GL_FLOAT, 24, ctypes.c_void_p(12))
+                glDrawArrays(GL_TRIANGLES, 0, sub.faceCount)
+                glDisableClientState(GL_VERTEX_ARRAY)
+                glDisableClientState(GL_COLOR_ARRAY)
+            if sub.lineCount > 0:
+                glBindBuffer(GL_ARRAY_BUFFER, sub.lineVBO)
+                glEnableClientState(GL_VERTEX_ARRAY)
+                glEnableClientState(GL_COLOR_ARRAY)
+                glVertexPointer(3, GL_FLOAT, 24, ctypes.c_void_p(0))
+                glColorPointer(3, GL_FLOAT, 24, ctypes.c_void_p(12))
+                glDrawArrays(GL_LINES, 0, sub.lineCount)
+                glDisableClientState(GL_VERTEX_ARRAY)
+                glDisableClientState(GL_COLOR_ARRAY)
+    glBindBuffer(GL_ARRAY_BUFFER, 0)
+
+# ---------- draw_crosshair, draw_debug_info (unchanged) ----------
 def draw_crosshair():
+    # same as original
     glPushMatrix()
     glLoadIdentity()
     glMatrixMode(GL_PROJECTION)
@@ -432,6 +413,8 @@ def draw_crosshair():
     glPopMatrix()
 
 def draw_debug_info():
+    # same as original, but we can show FPS etc.
+    # We'll keep original implementation
     if not show_debug:
         return
     global fps_counter, fps_time, fps_display
@@ -517,7 +500,7 @@ while running:
     dt = clock.tick(144) / 1000.0
     keys = pygame.key.get_pressed()
 
-    # 处理输入事件
+    # 事件处理
     for event in pygame.event.get():
         if event.type == QUIT:
             running = False
@@ -573,24 +556,16 @@ while running:
             elif event.key == K_ESCAPE:
                 running = False
 
-    # 物理固定步长（包括流体）：每 FLUID_DT 秒跑一次
+    # 流体模拟（C++ 版本）
     fluid_time_acc += dt
     while fluid_time_acc >= FLUID_DT:
-        if DEBUG_PROFILE:
-            t0 = time.time()
-        # Advance scheduler and get positions scheduled for this tick
-        scheduled_positions = scheduler.tick()
-        # Now let the fluid simulator process scheduled positions (may be empty)
-        if DEBUG_PROFILE:
-            t_sched = time.time()
-            fluid_simulator.tick(scheduled_positions)
-            t1 = time.time()
-            print(f"[PROFILE] scheduler->fluid tick ms: {(t1-t0)*1000.0:.2f} (sched_ms={(t_sched-t0)*1000.0:.2f})")
-        else:
-            fluid_simulator.tick(scheduled_positions)
+        # C++ fluid simulator tick
+        fluid_sim.tick()
+        # Also tick Python scheduler for compatibility (may be empty)
+        scheduler.tick()
         fluid_time_acc -= FLUID_DT
 
-    # 物理/玩家运动（基于 PHYSICS_DT 的子步）
+    # 玩家物理
     physics_accumulator += dt
     while physics_accumulator >= PHYSICS_DT:
         player.prev_x, player.prev_y, player.prev_z = player.x, player.y, player.z
@@ -598,7 +573,7 @@ while running:
         player.update(PHYSICS_DT, keys)
         physics_accumulator -= PHYSICS_DT
 
-    # 区块加载/生成逻辑（保留）
+    # 区块加载/生成（保留原有逻辑，但使用C++ setBlock）
     update_chunk_load_levels(player.x, player.z, noise_gen, seed)
 
     # 渲染插值
@@ -609,7 +584,6 @@ while running:
     render_rot_x = player.prev_rot_x + (player.rot_x - player.prev_rot_x) * alpha
     render_rot_y = player.prev_rot_y + (player.rot_y - player.prev_rot_y) * alpha
 
-    # 渲染
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
     glLoadIdentity()
     eye = (render_x, render_y + player.eye_height, render_z)
@@ -621,6 +595,7 @@ while running:
 
     render_chunks()
 
+    # 准星高亮 (unchanged)
     physical_eye = player.eye()
     physical_dir = player.look()
     hit_pos, _ = raycast(physical_eye, physical_dir)
@@ -650,10 +625,8 @@ while running:
     draw_debug_info()
     pygame.display.flip()
 
-# 清理
+# 清理 (删除VBO在C++中管理，但Python也需要清理引用)
 for chunk in chunks.values():
-    try:
-        glDeleteBuffers(2, [chunk.face_vbo, chunk.line_vbo])
-    except Exception:
-        pass
+    # No need to delete VBOs; C++ handles them when chunk is destroyed.
+    pass
 pygame.quit()

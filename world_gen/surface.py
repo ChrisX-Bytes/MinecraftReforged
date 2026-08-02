@@ -1,6 +1,6 @@
 # world_gen/surface.py
 from chunk_manager import get_block, set_block
-from config import BIOME_PLAINS, BIOME_FOREST, BIOME_HILLS, BIOME_MOUNTAINS, BIOME_OCEAN, BIOME_DESERT, BIOME_SNOWY_TUNDRA
+from .biome_params import BIOME_PLAINS, BIOME_FOREST, BIOME_HILLS, BIOME_MOUNTAINS, BIOME_OCEAN, BIOME_DESERT, BIOME_SNOWY_TUNDRA
 
 def apply_surface_rule(x, y, z, biome_id, noise_gen):
     block = get_block(x, y, z)
