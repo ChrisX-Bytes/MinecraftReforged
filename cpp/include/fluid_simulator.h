@@ -2,6 +2,8 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <array>
+#include <vector>
+#include <utility>
 #include <cstdint>
 #include "world.h"
 
@@ -17,7 +19,14 @@ public:
     // 注入 World 指针，使流体模拟可跨区块读写方块/水位
     FluidSimulator(World* world = nullptr, int updatesPerTick = 40);
 
+    // 重建 World 后更新指针，避免悬空（reset_world 会销毁旧 World 实例）
+    void setWorld(World* w);
+
     void tick(); // 每游戏刻调用，推进计划刻并处理至多 updatesPerTick 个方块
+
+    // 返回本次 tick 期间被流体改动过的区块坐标列表 [(cx,cz),...]，并清空内部集合。
+    // Python 端据此把对应区块加入 rebuild_queue，确保流体改动可见。
+    std::vector<std::pair<int,int>> popDirtyChunks();
 
     // 方块变化时激活该位置（5 刻后处理），触发流动
     void activate(uint64_t pos);
@@ -33,6 +42,10 @@ private:
     int currentBucket = 0;
 
     int updatesPerTick;
+
+    // 本次 tick 期间被流体改动过的区块集合，key = (uint32(cx)<<32)|uint32(cz)
+    std::unordered_set<uint64_t> dirtyChunks;
+    void markChunkDirty(int wx, int wz);
 
     // pos 编码：wx(24) | wy(20) | wz(20)，共 64 位
     static void decode(uint64_t pos, int& wx, int& wy, int& wz);

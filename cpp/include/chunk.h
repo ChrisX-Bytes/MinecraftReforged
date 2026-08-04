@@ -19,6 +19,8 @@ public:
     SubChunk* getSubChunk(int sectionIdx);
     void rebuildDirtySubChunks();
 
+    void setWorld(World* w); // 转发给所有 subchunks，供流体渲染查相邻区块
+
     // 流体数据
     std::unordered_map<uint64_t, uint8_t> fluidLevels;   // key: (wx,wy,wz) 压缩
     std::unordered_set<uint64_t> pendingFluids;

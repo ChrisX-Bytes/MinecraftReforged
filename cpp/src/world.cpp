@@ -8,7 +8,9 @@ Chunk* World::getChunk(int cx, int cz) {
     }
     // 创建新区块
     auto result = chunks.emplace(key, Chunk(cx, cz));
-    return &result.first->second;
+    Chunk* chunk = &result.first->second;
+    chunk->setWorld(this); // 让子区块能查相邻区块水位（流体渲染用）
+    return chunk;
 }
 
 BlockID World::getBlock(int wx, int wy, int wz) {

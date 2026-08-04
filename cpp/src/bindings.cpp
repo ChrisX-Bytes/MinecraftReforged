@@ -48,7 +48,9 @@ PYBIND11_MODULE(minecraft_core, m) {
 
     py::class_<FluidSimulator>(m, "FluidSimulator")
         .def(py::init<World*, int>(), py::arg("world") = nullptr, py::arg("updatesPerTick") = 40)
+        .def("setWorld", &FluidSimulator::setWorld)
         .def("tick", &FluidSimulator::tick)
         .def("activate", &FluidSimulator::activate)
-        .def("setSource", &FluidSimulator::setSource);
+        .def("setSource", &FluidSimulator::setSource)
+        .def("popDirtyChunks", &FluidSimulator::popDirtyChunks);
 }

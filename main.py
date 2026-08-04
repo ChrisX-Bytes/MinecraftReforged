@@ -14,7 +14,7 @@ warnings.filterwarnings("ignore")
 
 from config import *
 from chunk_manager import (
-    chunks, get_chunk, set_block, get_block, is_solid,
+    chunks, get_chunk, set_block, get_block, is_solid, is_targetable,
     rebuild_chunk, rebuild_neighbors, Chunk, get_chunk_pos,
     calculate_load_level, FACES, get_face_color, rebuild_queue,
     init_world, reset_world
@@ -353,7 +353,8 @@ def raycast(origin, direction, max_dist=10):
     travel = 0.0
     normal = (0, 0, 0)
     while travel <= max_dist:
-        if (bx, by, bz) != start_block and is_solid(bx, by, bz):
+        # 用 is_targetable（含水）让水也能被射线命中/挖掘；放置逻辑仍用 is_solid
+        if (bx, by, bz) != start_block and is_targetable(bx, by, bz):
             return (bx, by, bz), normal
         if t_max_x < t_max_y and t_max_x < t_max_z:
             travel = t_max_x
@@ -432,12 +433,13 @@ BLOCK_OUTLINE_EDGES = [
 ]
 
 def draw_block_outline(x, y, z):
-    """严格复刻 MC：只给准星瞄准的方块画黑色线框（12 条棱，略微放大，无视深度遮挡）。"""
+    """严格复刻 MC：只给准星瞄准的方块画黑色线框（12 条棱）。
+    MC 原版默认对瞄准线框做深度测试——被前方地形遮挡时不显示（不穿透方块）。"""
     glPushAttrib(GL_ENABLE_BIT | GL_LINE_BIT)
     glPushMatrix()
     glTranslatef(x, y, z)
     glScalef(1.002, 1.002, 1.002)  # 略微外扩，避免与方块表面 Z-fighting
-    glDisable(GL_DEPTH_TEST)        # MC 原版线框始终可见，不被地形遮挡
+    glEnable(GL_DEPTH_TEST)         # 被前方方块遮挡时不显示（MC 原版默认行为）
     glLineWidth(2)
     glColor3f(0, 0, 0)
     glBegin(GL_LINES)
@@ -572,7 +574,7 @@ while running:
             direction = player.look()
             if event.button == 1:
                 pos, _ = raycast(eye, direction)
-                if pos and is_solid(*pos):
+                if pos and is_targetable(*pos):
                     set_block(pos[0], pos[1], pos[2], None)
                     cx, cz = get_chunk_pos(pos[0], pos[2])
                     rebuild_neighbors(cx, cz)
@@ -619,6 +621,11 @@ while running:
     while fluid_time_acc >= FLUID_DT:
         # C++ fluid simulator tick
         fluid_sim.tick()
+        # 流体改动方块后，把受影响区块加入重建队列，否则网格不更新、水流不可见
+        for dCx, dCz in fluid_sim.popDirtyChunks():
+            ch = chunks.get((int(dCx), int(dCz)))
+            if ch is not None:
+                rebuild_queue.add(ch)
         # Also tick Python scheduler for compatibility (may be empty)
         scheduler.tick()
         fluid_time_acc -= FLUID_DT
@@ -657,29 +664,10 @@ while running:
     physical_eye = player.eye()
     physical_dir = player.look()
     hit_pos, _ = raycast(physical_eye, physical_dir)
-    if hit_pos and is_solid(*hit_pos):
+    if hit_pos and is_targetable(*hit_pos):
         x, y, z = hit_pos
-        # 瞄准方块黑色线框（复刻 MC：只画这一个方块）
+        # MC 原版：瞄准方块只显示黑色线框，无颜色加深/覆盖层，被遮挡时不显示。
         draw_block_outline(x, y, z)
-        btype = get_block(x, y, z)
-        if btype:
-            r, g, b = get_face_color(btype, (0, 1, 0))
-            dark = (r * 0.5, g * 0.5, b * 0.5)
-            glPushMatrix()
-            glTranslatef(x, y, z)
-            glScalef(1.001, 1.001, 1.001)
-            glEnable(GL_BLEND)
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-            glDisable(GL_DEPTH_TEST)
-            glColor4f(dark[0], dark[1], dark[2], 0.6)
-            glBegin(GL_TRIANGLES)
-            for face in FACES:
-                for vx, vy, vz in face["verts"]:
-                    glVertex3f(vx, vy, vz)
-            glEnd()
-            glEnable(GL_DEPTH_TEST)
-            glDisable(GL_BLEND)
-            glPopMatrix()
 
     draw_crosshair()
     draw_debug_info()

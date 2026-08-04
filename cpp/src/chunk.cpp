@@ -1,10 +1,17 @@
 #include "chunk.h"
+#include "world.h"
 #include <cmath>
 
 Chunk::Chunk(int cx, int cz) : cx(cx), cz(cz), loadLevel(45), isGenerated(false) {
     for (int i = 0; i < NUM_SECTIONS; ++i) {
         subchunks[i].init(i * 16 + WORLD_BOTTOM);
         subchunks[i].setChunkPos(cx, cz);   // 关键：告诉子区块它属于哪个区块
+    }
+}
+
+void Chunk::setWorld(World* w) {
+    for (int i = 0; i < NUM_SECTIONS; ++i) {
+        subchunks[i].setWorld(w);
     }
 }
 

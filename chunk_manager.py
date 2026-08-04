@@ -45,10 +45,11 @@ def register_fluid_sim(sim):
     fluid_sim = sim
 
 def _encode_pos(wx, wy, wz):
-    # 与 C++ FluidSimulator::encode 完全一致：u32 截断后按位打包
-    MASK32 = 0xFFFFFFFF
-    MASK20 = 0xFFFFF
-    return ((wx & MASK32) << 40) | ((wy & MASK32 & MASK20) << 20) | (wz & MASK32 & MASK20)
+    # 与 C++ FluidSimulator::encode 完全一致：wx(24) | wy(16) | wz(24)，总 64 位。
+    # 各段按位截断后左移，绝不超 uint64。
+    MASK24 = 0xFFFFFF
+    MASK16 = 0xFFFF
+    return (((wx & MASK24) << 40) | ((wy & MASK16) << 24) | (wz & MASK24))
 
 BLOCK_ID_MAP = {
     'air': 0,
@@ -101,14 +102,19 @@ class Chunk:
 
     def set_block(self, wx, wy, wz, block_type, fluid_level=None, activate_fluid=True):
         bid = get_block_id(block_type)
+        # 先读旧方块：判断本次改动是否涉及水（新放的是水，或旧方块是水被替换/挖掉）。
+        # 只有涉及水时才需要触发流体调度，避免生成阶段海量非水方块淹没调度桶。
+        old_bid = self.cpp_chunk.getBlock(wx, wy, wz)
+        involves_water = (bid == BLOCK_WATER_ID) or (old_bid == BLOCK_WATER_ID)
+
         self.cpp_chunk.setBlock(wx, wy, wz, bid)
         # 水位：玩家放置的水默认为水源(level 0)；非水方块水位清零
         if bid == BLOCK_WATER_ID:
             self.cpp_chunk.setWaterLevel(wx, wy, wz, fluid_level if fluid_level is not None else 0)
         else:
             self.cpp_chunk.setWaterLevel(wx, wy, wz, 0)
-        # 触发流体流动（仅玩家交互，生成阶段传 activate_fluid=False 以避免海量调度）
-        if activate_fluid and fluid_sim is not None:
+        # 仅当涉及水、且允许激活时才调度（生成阶段传 activate_fluid=False 整条路径都不激活）
+        if activate_fluid and involves_water and fluid_sim is not None:
             pos = _encode_pos(wx, wy, wz)
             fluid_sim.activate(pos)
             for dx, dy, dz in ((1,0,0),(-1,0,0),(0,1,0),(0,-1,0),(0,0,1),(0,0,-1)):
@@ -210,6 +216,13 @@ def is_solid(wx, wy, wz):
         return False
     return True
 
+def is_targetable(wx, wy, wz):
+    """射线能否命中此方块（含水）。用于挖掘：MC 用桶舀水，本作没桶，让水可被挖掉。"""
+    b = get_block(wx, wy, wz)
+    if b is None or b == 'air':
+        return False
+    return True  # 含水，可被射线命中并挖掘
+
 def set_block(wx, wy, wz, block_type, fluid_level=None, activate_fluid=True):
     cx, cz = get_chunk_pos(wx, wz)
     chunk = get_chunk(cx, cz)
@@ -271,3 +284,7 @@ def reset_world():
     # 重新创建 C++ World
     world = None
     init_world()  # 这会创建新的 mc.World 实例
+    # 关键：reset_world 会销毁旧 World 实例，FluidSimulator 内部持有的旧指针会悬空，
+    # 必须更新为新 World 指针，否则 tick() 访问已释放内存会段错误。
+    if fluid_sim is not None:
+        fluid_sim.setWorld(world)
