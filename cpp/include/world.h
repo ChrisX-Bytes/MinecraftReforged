@@ -8,6 +8,9 @@ public:
     BlockID getBlock(int wx, int wy, int wz);
     void setBlock(int wx, int wy, int wz, BlockID id);
 
+    uint8_t getWaterLevel(int wx, int wy, int wz);
+    void setWaterLevel(int wx, int wy, int wz, uint8_t level);
+
 private:
     std::unordered_map<uint64_t, Chunk> chunks; // key: (cx,cz) Ñ¹Ëõ
 };

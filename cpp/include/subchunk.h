@@ -19,6 +19,10 @@ public:
     BlockID getBlock(int lx, int ly, int lz) const;
     void setBlock(int lx, int ly, int lz, BlockID id);
 
+    // 水位（仅对 BLOCK_WATER 方块有意义）：0=水源, 1-7=流水, 8=下落满柱
+    uint8_t getWaterLevel(int lx, int ly, int lz) const;
+    void setWaterLevel(int lx, int ly, int lz, uint8_t level);
+
     bool isDirty() const { return dirty; }
     void markDirty() { dirty = true; }
     void clearDirty() { dirty = false; }
@@ -27,6 +31,10 @@ public:
 
     int getYBase() const { return yBase; }
 
+    // 线框顶点数据（每6个float一组：x,y,z,r,g,b）
+    // buildMesh() 会同时填充它，供 Python 端上传到 lineVBO
+    std::vector<float> lineVertices;
+
     uint32_t faceVBO = 0;
     uint32_t lineVBO = 0;
     int faceCount = 0;
@@ -34,6 +42,7 @@ public:
 
 private:
     std::array<BlockID, SUBCHUNK_VOLUME> blocks;
+    std::array<uint8_t, SUBCHUNK_VOLUME> waterLevels; // 并行副数据，仅水方块有意义；默认 0（水源）
     int yBase;
     bool dirty;
     int chunkX, chunkZ;   // 新增：所属区块的世界坐标（以区块为单位）

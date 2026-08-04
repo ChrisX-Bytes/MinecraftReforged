@@ -40,34 +40,46 @@ def generate_chunk_terrain(cx, cz, noise_gen, seed):
     base_x = cx * CHUNK_SIZE
     base_z = cz * CHUNK_SIZE
 
-    # 只遍历 x,z 列，计算每列的地表高度，然后填充从底部到地表
+    column_top = {}
+    # 计算每列地表高度
     for lx in range(CHUNK_SIZE):
         for lz in range(CHUNK_SIZE):
             wx = base_x + lx
             wz = base_z + lz
             if abs(wx) > WORLD_RADIUS or abs(wz) > WORLD_RADIUS:
                 continue
-            # 从高处往下找地表高度
             top_y = WORLD_BOTTOM - 1
             for wy in range(WORLD_TOP - 1, WORLD_BOTTOM - 1, -1):
                 density = final_density(wx, wy, wz, noise_gen, seed)
                 if density > 0:
                     top_y = wy
                     break
-            # 如果找到地表（top_y > WORLD_BOTTOM-1），则从底部到地表填充石头
             if top_y > WORLD_BOTTOM - 1:
-                for wy in range(WORLD_BOTTOM, top_y + 1):
-                    set_block(wx, wy, wz, 'stone')
+                column_top[(lx, lz)] = top_y
 
-    # 初始化水源（海平面）
+    # 填充方块（从底部到地表）
     for lx in range(CHUNK_SIZE):
         for lz in range(CHUNK_SIZE):
             wx = base_x + lx
             wz = base_z + lz
             if abs(wx) > WORLD_RADIUS or abs(wz) > WORLD_RADIUS:
                 continue
+            top_y = column_top.get((lx, lz), WORLD_BOTTOM - 1)
+            if top_y > WORLD_BOTTOM - 1:
+                for wy in range(WORLD_BOTTOM, top_y + 1):
+                    set_block(wx, wy, wz, 'stone')
+
+    # 水源
+    for lx in range(CHUNK_SIZE):
+        for lz in range(CHUNK_SIZE):
+            wx = base_x + lx
+            wz = base_z + lz
+            if abs(wx) > WORLD_RADIUS or abs(wz) > WORLD_RADIUS:
+                continue
+            top_y = column_top.get((lx, lz), WORLD_BOTTOM - 1)
             if top_y < 63:
-                set_block(wx, 63, wz, 'water', 0)
+                # 海面水源：level 0，生成阶段不激活流动（静态海面本就稳定，激活会塞爆调度桶）
+                set_block(wx, 63, wz, 'water', 0, activate_fluid=False)
 
     chunk.generation_stage = 2
     chunk.is_dirty = True
@@ -191,5 +203,19 @@ def update_chunk_load_levels(player_x, player_z, noise_gen, seed):
     for cx,cz in to_unload:
         chunk = chunks.get((cx,cz))
         if chunk:
-            glDeleteBuffers(2, [chunk.face_vbo, chunk.line_vbo])
+            # 释放该区块所有子区块实际申请的 VBO（faceVBO/lineVBO）。
+            # 旧代码删的是 Chunk 包装层上恒为 0 的 face_vbo/line_vbo，子区块 VBO 从未释放 → 显存泄漏。
+            vbos_to_delete = []
+            for i in range(NUM_SECTIONS):
+                sub = chunk.get_subchunk(i)
+                if sub is None:
+                    continue
+                if sub.faceVBO != 0:
+                    vbos_to_delete.append(sub.faceVBO)
+                    sub.faceVBO = 0
+                if sub.lineVBO != 0:
+                    vbos_to_delete.append(sub.lineVBO)
+                    sub.lineVBO = 0
+            if vbos_to_delete:
+                glDeleteBuffers(len(vbos_to_delete), vbos_to_delete)
             del chunks[(cx,cz)]

@@ -17,25 +17,25 @@ from chunk_manager import (
     chunks, get_chunk, set_block, get_block, is_solid,
     rebuild_chunk, rebuild_neighbors, Chunk, get_chunk_pos,
     calculate_load_level, FACES, get_face_color, rebuild_queue,
-    init_world, world
+    init_world, reset_world
 )
+import chunk_manager as cm  # 用模块引用访问 init_world 之后的 world 实例
 from world_gen import generate_chunk, generate_chunk_to_level, update_chunk_load_levels
 from world_gen.noise import PerlinNoise3D
 # Fluid simulator now uses C++ core, but we keep Python wrapper for compatibility
 from world_gen.scheduler import scheduler
 import minecraft_core as mc
 
+
 # ---------- 调试开关 ----------
 DEBUG_PROFILE = False  # 关闭调试输出
 
 # ---------- 初始化 C++ 核心 ----------
-init_world()  # creates mc.World instance
+init_world()  # creates mc.World instance (cm.world)
 
-# ---------- 流体模拟器（使用 C++ 版本） ----------
-# We'll use the C++ FluidSimulator directly.
-fluid_sim = mc.FluidSimulator(DEFAULT_UPDATES_PER_TICK)
-# Note: C++ fluid simulator uses its own scheduler, but we also have Python scheduler for compatibility.
-# We'll keep both and let C++ handle main fluid logic.
+# ---------- 流体模拟器（使用 C++ 版本，注入 World 指针以驱动真实水流） ----------
+fluid_sim = mc.FluidSimulator(cm.world, DEFAULT_UPDATES_PER_TICK)
+cm.register_fluid_sim(fluid_sim)  # 让 chunk_manager.set_block 能触发流动
 
 # ---------- 初始化 Pygame/OpenGL ----------
 pygame.init()
@@ -46,7 +46,12 @@ pygame.mouse.set_visible(False)
 pygame.event.set_grab(True)
 
 glEnable(GL_DEPTH_TEST)
+# 背面剔除默认关闭——只在地形渲染时临时开启（见 render_chunks），避免误伤
+# 所有 2D 叠层（F3 调试框、准星、选中高亮、加载条）的多边形。
+# FACE_INDICES 已统一为逆时针绕序（从面外部看），故用 GL_CCW + GL_BACK。
 glDisable(GL_CULL_FACE)
+glCullFace(GL_BACK)
+glFrontFace(GL_CCW)
 glDisable(GL_LIGHTING)
 glLineWidth(1)
 glMatrixMode(GL_PROJECTION)
@@ -122,8 +127,10 @@ def draw_loading(progress):
 
 # ---------- 初始世界生成（使用 C++ setBlock） ----------
 def generate_initial_world():
-    global chunks
-    chunks.clear()
+    global noise_gen, seed
+    # 1. 重置世界（清空所有旧数据）
+    reset_world()
+
     seed = 114514
     noise_gen = PerlinNoise3D(seed=seed)
     start_cx, start_cz = 0, 0
@@ -298,17 +305,30 @@ for y in range(100, -64, -1):
         # player.y = y + 1
         player.y = 80
         break
+# 正确查找玩家出生点：从世界顶部向下找第一个非空气方块，然后站在它上面
+# 查找玩家出生点
 spawn_x, spawn_z = 0, 0
-spawn_y = 120
+spawn_y = 150  # 从高处开始
+found = False
 while spawn_y > -64:
+    # 检查当前位置和上方一点（避免卡在方块里）
     if is_solid(spawn_x, spawn_y, spawn_z):
+        # 找到固体方块，站在它上面
         player.y = spawn_y + 1
+        found = True
         break
     spawn_y -= 1
-else:
-    player.y = 80
+
+if not found:
+    # 如果没找到任何方块，回退到 y=100（但这种情况应该不会发生）
+    player.y = 100
+    print("Warning: No solid block found, spawning at y=100")
+
 player.x, player.z = spawn_x, spawn_z
 player.spawn_x, player.spawn_y, player.spawn_z = player.x, player.y, player.z
+# 设置prev坐标避免插值问题
+player.prev_x, player.prev_y, player.prev_z = player.x, player.y, player.z
+print(f"Player spawn at: {player.x}, {player.y}, {player.z}")
 
 # ---------- 射线投射 (unchanged) ----------
 def raycast(origin, direction, max_dist=10):
@@ -354,13 +374,24 @@ def raycast(origin, direction, max_dist=10):
 
 # ---------- 渲染（使用子区块 VBO 由 C++ 管理） ----------
 def render_chunks():
-    # 先重建所有脏区块
-    for chunk in list(chunks.values()):
+    # 只重建真正入队的脏区块，每帧最多 REBUILDS_PER_FRAME 个，避免每帧全量重建。
+    # rebuild_mesh 内部还会按 C++ 子区块 dirty 标记做二次过滤，未变脏的子区块直接跳过。
+    rebuilt = 0
+    for chunk in list(rebuild_queue):
+        if rebuilt >= REBUILDS_PER_FRAME:
+            break
         if chunk.load_level > LOAD_LEVEL_FULL:
+            rebuild_queue.discard(chunk)
             continue
         chunk.rebuild_mesh()
+        rebuild_queue.discard(chunk)
+        rebuilt += 1
 
     # 绘制所有可见区块的子区块
+    # 背面剔除只在地形渲染期间开启，用 push/pop 保证退出时恢复关闭，
+    # 避免误伤 F3 调试框、准星、选中高亮等 2D 叠层（它们需要双面绘制）。
+    glPushAttrib(GL_ENABLE_BIT)
+    glEnable(GL_CULL_FACE)
     for chunk in list(chunks.values()):
         if chunk.load_level > LOAD_LEVEL_FULL:
             continue
@@ -368,6 +399,7 @@ def render_chunks():
             sub = chunk.get_subchunk(idx)
             if sub is None:
                 continue
+            # 绘制面
             if sub.faceCount > 0 and sub.faceVBO != 0:
                 glBindBuffer(GL_ARRAY_BUFFER, sub.faceVBO)
                 glEnableClientState(GL_VERTEX_ARRAY)
@@ -377,7 +409,43 @@ def render_chunks():
                 glDrawArrays(GL_TRIANGLES, 0, sub.faceCount)
                 glDisableClientState(GL_VERTEX_ARRAY)
                 glDisableClientState(GL_COLOR_ARRAY)
+    glPopAttrib()
     glBindBuffer(GL_ARRAY_BUFFER, 0)
+
+# 瞄准方块的 12 条棱（局部坐标，±0.5 立方体）
+BLOCK_OUTLINE_EDGES = [
+    # 底面 4 条
+    (-0.5,-0.5,-0.5), ( 0.5,-0.5,-0.5),
+    ( 0.5,-0.5,-0.5), ( 0.5,-0.5, 0.5),
+    ( 0.5,-0.5, 0.5), (-0.5,-0.5, 0.5),
+    (-0.5,-0.5, 0.5), (-0.5,-0.5,-0.5),
+    # 顶面 4 条
+    (-0.5, 0.5,-0.5), ( 0.5, 0.5,-0.5),
+    ( 0.5, 0.5,-0.5), ( 0.5, 0.5, 0.5),
+    ( 0.5, 0.5, 0.5), (-0.5, 0.5, 0.5),
+    (-0.5, 0.5, 0.5), (-0.5, 0.5,-0.5),
+    # 4 条立柱
+    (-0.5,-0.5,-0.5), (-0.5, 0.5,-0.5),
+    ( 0.5,-0.5,-0.5), ( 0.5, 0.5,-0.5),
+    ( 0.5,-0.5, 0.5), ( 0.5, 0.5, 0.5),
+    (-0.5,-0.5, 0.5), (-0.5, 0.5, 0.5),
+]
+
+def draw_block_outline(x, y, z):
+    """严格复刻 MC：只给准星瞄准的方块画黑色线框（12 条棱，略微放大，无视深度遮挡）。"""
+    glPushAttrib(GL_ENABLE_BIT | GL_LINE_BIT)
+    glPushMatrix()
+    glTranslatef(x, y, z)
+    glScalef(1.002, 1.002, 1.002)  # 略微外扩，避免与方块表面 Z-fighting
+    glDisable(GL_DEPTH_TEST)        # MC 原版线框始终可见，不被地形遮挡
+    glLineWidth(2)
+    glColor3f(0, 0, 0)
+    glBegin(GL_LINES)
+    for vx, vy, vz in BLOCK_OUTLINE_EDGES:
+        glVertex3f(vx, vy, vz)
+    glEnd()
+    glPopMatrix()
+    glPopAttrib()
 
 # ---------- draw_crosshair, draw_debug_info (unchanged) ----------
 def draw_crosshair():
@@ -591,6 +659,8 @@ while running:
     hit_pos, _ = raycast(physical_eye, physical_dir)
     if hit_pos and is_solid(*hit_pos):
         x, y, z = hit_pos
+        # 瞄准方块黑色线框（复刻 MC：只画这一个方块）
+        draw_block_outline(x, y, z)
         btype = get_block(x, y, z)
         if btype:
             r, g, b = get_face_color(btype, (0, 1, 0))

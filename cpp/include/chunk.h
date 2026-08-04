@@ -13,6 +13,9 @@ public:
     BlockID getBlock(int wx, int wy, int wz) const;
     void setBlock(int wx, int wy, int wz, BlockID id);
 
+    uint8_t getWaterLevel(int wx, int wy, int wz) const;
+    void setWaterLevel(int wx, int wy, int wz, uint8_t level);
+
     SubChunk* getSubChunk(int sectionIdx);
     void rebuildDirtySubChunks();
 

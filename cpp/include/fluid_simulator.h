@@ -3,32 +3,45 @@
 #include <unordered_set>
 #include <array>
 #include <cstdint>
+#include "world.h"
+
+// MC Java 水流规则：
+//   level 0   = 水源（满方块，下方需固体/水源支撑）
+//   level 1-7 = 流水（每远一格 +1，平地最远 7 格）
+//   level 8   = 下落（垂直下落的满柱）
+// 水源形成：水方块若水平方向有 >=2 个水源邻居 且 下方为固体/水源 -> 变水源。
+// 刻速：水每 5 游戏刻扩散一格。
 
 class FluidSimulator {
 public:
-    FluidSimulator(int updatesPerTick = 40);
+    // 注入 World 指针，使流体模拟可跨区块读写方块/水位
+    FluidSimulator(World* world = nullptr, int updatesPerTick = 40);
 
-    void tick(); // 每帧调用，推进计划刻
+    void tick(); // 每游戏刻调用，推进计划刻并处理至多 updatesPerTick 个方块
 
-    // 激活一个位置（方块变化时调用）
+    // 方块变化时激活该位置（5 刻后处理），触发流动
     void activate(uint64_t pos);
 
-    // 设置水源（初始生成）
+    // 设置水源（初始生成用，不调度）
     void setSource(uint64_t pos, uint8_t level = 0);
 
 private:
-    // 计划刻桶（每5刻一个桶，共512个桶循环）
+    World* world;
+
+    // 计划刻桶（512 个桶循环，每桶代表一个游戏刻）
     std::array<std::unordered_set<uint64_t>, 512> buckets;
     int currentBucket = 0;
 
     int updatesPerTick;
 
-    // 流体状态：'still' 或 'flowing'，用uint8_t表示0=still, 1=flowing
-    std::unordered_map<uint64_t, uint8_t> fluidStates;
+    // pos 编码：wx(24) | wy(20) | wz(20)，共 64 位
+    static void decode(uint64_t pos, int& wx, int& wy, int& wz);
+    static uint64_t encode(int wx, int wy, int wz);
 
-    // 内部方法
-    void schedule(uint64_t pos, int delay);
-    void processSource(uint64_t pos);
-    void spread(uint64_t pos, int level);
-    void applyUpdate(uint64_t pos, uint8_t newLevel, uint8_t state);
+    void schedule(uint64_t pos, int delay);         // delay 单位：游戏刻
+    void processSource(uint64_t pos);               // 核心流动逻辑
+
+    // 辅助
+    bool isSolidOrWater(BlockID id) const;          // 是否阻挡水流（固体）
+    bool canFlowInto(BlockID id) const;             // 水能否流入（空气或水）
 };

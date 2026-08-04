@@ -38,6 +38,17 @@ def get_face_color(btype, face_dir):
 chunks = {}
 rebuild_queue = set()
 world = None
+fluid_sim = None  # 由 main.py 在初始化后通过 register_fluid_sim 注入
+
+def register_fluid_sim(sim):
+    global fluid_sim
+    fluid_sim = sim
+
+def _encode_pos(wx, wy, wz):
+    # 与 C++ FluidSimulator::encode 完全一致：u32 截断后按位打包
+    MASK32 = 0xFFFFFFFF
+    MASK20 = 0xFFFFF
+    return ((wx & MASK32) << 40) | ((wy & MASK32 & MASK20) << 20) | (wz & MASK32 & MASK20)
 
 BLOCK_ID_MAP = {
     'air': 0,
@@ -51,6 +62,7 @@ BLOCK_ID_MAP = {
     'bedrock': 8,
     'water': 9,
 }
+BLOCK_WATER_ID = BLOCK_ID_MAP['water']
 
 def init_world():
     global world
@@ -87,40 +99,56 @@ class Chunk:
         bid = self.cpp_chunk.getBlock(wx, wy, wz)
         return get_block_name(bid)
 
-    def set_block(self, wx, wy, wz, block_type, fluid_level=None):
+    def set_block(self, wx, wy, wz, block_type, fluid_level=None, activate_fluid=True):
         bid = get_block_id(block_type)
         self.cpp_chunk.setBlock(wx, wy, wz, bid)
-        if block_type == 'water':
-            pos = (wx << 40) | (wy << 20) | wz
-            self.cpp_chunk.pendingFluids.add(pos)
+        # 水位：玩家放置的水默认为水源(level 0)；非水方块水位清零
+        if bid == BLOCK_WATER_ID:
+            self.cpp_chunk.setWaterLevel(wx, wy, wz, fluid_level if fluid_level is not None else 0)
+        else:
+            self.cpp_chunk.setWaterLevel(wx, wy, wz, 0)
+        # 触发流体流动（仅玩家交互，生成阶段传 activate_fluid=False 以避免海量调度）
+        if activate_fluid and fluid_sim is not None:
+            pos = _encode_pos(wx, wy, wz)
+            fluid_sim.activate(pos)
+            for dx, dy, dz in ((1,0,0),(-1,0,0),(0,1,0),(0,-1,0),(0,0,1),(0,0,-1)):
+                fluid_sim.activate(_encode_pos(wx+dx, wy+dy, wz+dz))
         rebuild_queue.add(self)
 
     def rebuild_mesh(self):
-        # 1. 强制所有子区块标记为脏
-        for idx in range(NUM_SECTIONS):
-            sub = self.cpp_chunk.getSubChunk(idx)
-            if sub:
-                sub.markDirty()
-
-        # 2. 重建所有脏子区块
+        # 只重建真正变脏的子区块（C++ setBlock 已自动只标脏改动的那一个子区块）。
+        # 不要无条件 markDirty 全部——那会让 C++ buildMesh 的 if(!dirty) 快路径失效，
+        # 导致每帧全量重建+全量上传 VBO，这是加入水后卡顿的核心原因。
         for idx in range(NUM_SECTIONS):
             sub = self.cpp_chunk.getSubChunk(idx)
             if sub is None:
                 continue
-            if sub.isDirty():
-                verts = sub.buildMesh()
-                if verts:
-                    if sub.faceVBO == 0:
-                        sub.faceVBO = glGenBuffers(1)
-                    data = np.array(verts, dtype=np.float32)
-                    glBindBuffer(GL_ARRAY_BUFFER, sub.faceVBO)
-                    glBufferData(GL_ARRAY_BUFFER, data.nbytes, data, GL_DYNAMIC_DRAW)
-                    glBindBuffer(GL_ARRAY_BUFFER, 0)
-                    sub.faceCount = len(verts) // 6
-                    # 打印调试（可选）
-                    # print(f"SubChunk {idx} faceCount = {sub.faceCount}")
-                else:
-                    sub.faceCount = 0
+            if not sub.isDirty():
+                continue
+            verts = sub.buildMesh()
+            # 面数据
+            if verts:
+                if sub.faceVBO == 0:
+                    sub.faceVBO = glGenBuffers(1)
+                data = np.array(verts, dtype=np.float32)
+                glBindBuffer(GL_ARRAY_BUFFER, sub.faceVBO)
+                glBufferData(GL_ARRAY_BUFFER, data.nbytes, data, GL_DYNAMIC_DRAW)
+                glBindBuffer(GL_ARRAY_BUFFER, 0)
+                sub.faceCount = len(verts) // 6
+            else:
+                sub.faceCount = 0
+            # 线框数据（C++ buildMesh 不再填充 lineVertices；保留分支以兼容旧接口）
+            line_verts = sub.lineVertices
+            if line_verts:
+                if sub.lineVBO == 0:
+                    sub.lineVBO = glGenBuffers(1)
+                ldata = np.array(line_verts, dtype=np.float32)
+                glBindBuffer(GL_ARRAY_BUFFER, sub.lineVBO)
+                glBufferData(GL_ARRAY_BUFFER, ldata.nbytes, ldata, GL_DYNAMIC_DRAW)
+                glBindBuffer(GL_ARRAY_BUFFER, 0)
+                sub.lineCount = len(line_verts) // 6
+            else:
+                sub.lineCount = 0
 
     def get_subchunk(self, idx):
         return self.cpp_chunk.getSubChunk(idx)
@@ -175,16 +203,17 @@ def get_block(wx, wy, wz):
 
 def is_solid(wx, wy, wz):
     b = get_block(wx, wy, wz)
-    if not b:
+    # 注意：get_block 对空气返回字符串 'air'（非 None），不能再用 `if not b`
+    if b is None or b == 'air':
         return False
     if b == 'water':
         return False
     return True
 
-def set_block(wx, wy, wz, block_type, fluid_level=None):
+def set_block(wx, wy, wz, block_type, fluid_level=None, activate_fluid=True):
     cx, cz = get_chunk_pos(wx, wz)
     chunk = get_chunk(cx, cz)
-    chunk.set_block(wx, wy, wz, block_type, fluid_level)
+    chunk.set_block(wx, wy, wz, block_type, fluid_level, activate_fluid)
 
 def rebuild_chunk(cx, cz):
     chunk = chunks.get((cx, cz))
@@ -233,3 +262,12 @@ def calculate_load_level(dist_or_cx, cz=None, player_x=None, player_z=None):
         return LOAD_LEVEL_INACCESSIBLE
     else:
         return LOAD_LEVEL_UNLOADED
+
+
+def reset_world():
+    global world, chunks
+    # 清除 Python 侧的缓存引用（让旧对象被垃圾回收）
+    chunks.clear()
+    # 重新创建 C++ World
+    world = None
+    init_world()  # 这会创建新的 mc.World 实例

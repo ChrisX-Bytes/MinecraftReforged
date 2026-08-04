@@ -4,10 +4,11 @@ from .biome_params import BIOME_PLAINS, BIOME_FOREST, BIOME_HILLS, BIOME_MOUNTAI
 
 def apply_surface_rule(x, y, z, biome_id, noise_gen):
     block = get_block(x, y, z)
-    if block is None:
+    if block is None or block == 'air':
         return
 
-    is_surface = (get_block(x, y+1, z) is None)
+    # 上方为空气才视为地表（get_block 对空气返回 'air'，非 None）
+    is_surface = (get_block(x, y+1, z) in (None, 'air'))
     if is_surface and block in ('stone', 'deepslate'):
         if biome_id == BIOME_PLAINS:
             if y > 100:

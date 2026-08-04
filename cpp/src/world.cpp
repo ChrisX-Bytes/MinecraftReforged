@@ -24,3 +24,17 @@ void World::setBlock(int wx, int wy, int wz, BlockID id) {
     Chunk* chunk = getChunk(cx, cz);
     chunk->setBlock(wx, wy, wz, id);
 }
+
+uint8_t World::getWaterLevel(int wx, int wy, int wz) {
+    int cx = wx >> 4;
+    int cz = wz >> 4;
+    Chunk* chunk = getChunk(cx, cz);
+    return chunk->getWaterLevel(wx, wy, wz);
+}
+
+void World::setWaterLevel(int wx, int wy, int wz, uint8_t level) {
+    int cx = wx >> 4;
+    int cz = wz >> 4;
+    Chunk* chunk = getChunk(cx, cz);
+    chunk->setWaterLevel(wx, wy, wz, level);
+}

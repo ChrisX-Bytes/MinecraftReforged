@@ -33,6 +33,26 @@ void Chunk::setBlock(int wx, int wy, int wz, BlockID id) {
     subchunks[secIdx].setBlock(lx, ly, lz, id);
 }
 
+uint8_t Chunk::getWaterLevel(int wx, int wy, int wz) const {
+    int secIdx = getSectionIndex(wy);
+    if (secIdx < 0) return 0;
+    int lx = wx - cx * 16;
+    int ly = wy - (secIdx * 16 + WORLD_BOTTOM);
+    int lz = wz - cz * 16;
+    if (lx < 0 || lx >= 16 || ly < 0 || ly >= 16 || lz < 0 || lz >= 16) return 0;
+    return subchunks[secIdx].getWaterLevel(lx, ly, lz);
+}
+
+void Chunk::setWaterLevel(int wx, int wy, int wz, uint8_t level) {
+    int secIdx = getSectionIndex(wy);
+    if (secIdx < 0) return;
+    int lx = wx - cx * 16;
+    int ly = wy - (secIdx * 16 + WORLD_BOTTOM);
+    int lz = wz - cz * 16;
+    if (lx < 0 || lx >= 16 || ly < 0 || ly >= 16 || lz < 0 || lz >= 16) return;
+    subchunks[secIdx].setWaterLevel(lx, ly, lz, level);
+}
+
 void Chunk::rebuildDirtySubChunks() {
     // Python 端会自己调用 buildMesh，这里留空
 }
