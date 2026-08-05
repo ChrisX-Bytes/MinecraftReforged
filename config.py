@@ -53,3 +53,8 @@ RANDOM_TICK_SPEED = 3
 # Debug
 DEBUG = False
 VERBOSE = False
+
+WATER_LEVEL_MIN = 0    # 水源
+WATER_LEVEL_MAX = 7    # 最远流动
+WATER_TOP_HEIGHT = 1.0 # 水源全高
+WATER_BOTTOM_HEIGHT = 0.1 # 最薄水层高度

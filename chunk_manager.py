@@ -140,7 +140,7 @@ class Chunk:
                 glBindBuffer(GL_ARRAY_BUFFER, sub.faceVBO)
                 glBufferData(GL_ARRAY_BUFFER, data.nbytes, data, GL_DYNAMIC_DRAW)
                 glBindBuffer(GL_ARRAY_BUFFER, 0)
-                sub.faceCount = len(verts) // 6
+                sub.faceCount = len(verts) // 8  # 每顶点 8 float: x,y,z,u,v,r,g,b
             else:
                 sub.faceCount = 0
             # 线框数据（C++ buildMesh 不再填充 lineVertices；保留分支以兼容旧接口）

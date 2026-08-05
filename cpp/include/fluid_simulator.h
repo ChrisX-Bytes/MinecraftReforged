@@ -47,7 +47,7 @@ private:
     std::unordered_set<uint64_t> dirtyChunks;
     void markChunkDirty(int wx, int wz);
 
-    // pos 编码：wx(24) | wy(20) | wz(20)，共 64 位
+    // pos 编码：wx(24) | wy(16) | wz(24)，共 64 位
     static void decode(uint64_t pos, int& wx, int& wy, int& wz);
     static uint64_t encode(int wx, int wy, int wz);
 

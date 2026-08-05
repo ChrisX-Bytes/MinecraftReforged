@@ -21,6 +21,7 @@ from chunk_manager import (
 )
 import chunk_manager as cm  # 用模块引用访问 init_world 之后的 world 实例
 from world_gen import generate_chunk, generate_chunk_to_level, update_chunk_load_levels
+from texture_atlas import build_atlas, ATLAS_SIZE_PX, ATLAS_SIZE_PY
 from world_gen.noise import PerlinNoise3D
 # Fluid simulator now uses C++ core, but we keep Python wrapper for compatibility
 from world_gen.scheduler import scheduler
@@ -59,6 +60,10 @@ gluPerspective(70, display[0] / display[1], 0.1, 100.0)
 glMatrixMode(GL_MODELVIEW)
 glClearColor(0.53, 0.81, 0.92, 1.0)
 
+# ---------- 构建纹理 Atlas ----------
+atlas_tex_id = build_atlas()
+print(f"Texture atlas built: {ATLAS_SIZE_PX}x{ATLAS_SIZE_PY}, GL id={atlas_tex_id}")
+
 # ---------- 参数 ----------
 FLUID_TPS = 20.0   # C++ handles scheduling at 20 TPS; we still need to call tick()
 FLUID_DT = 1.0 / FLUID_TPS
@@ -68,7 +73,7 @@ fluid_time_acc = 0.0
 REBUILDS_PER_FRAME = 10  # can be larger since C++ is fast
 
 # ---------- 字体 ----------
-FONT_PATH = "./File/minecraftfont.woff"
+FONT_PATH = "./assets/font/minecraftfont.woff"
 try:
     if os.path.exists(FONT_PATH):
         debug_font = pygame.font.Font(FONT_PATH, 18)
@@ -393,6 +398,14 @@ def render_chunks():
     # 避免误伤 F3 调试框、准星、选中高亮等 2D 叠层（它们需要双面绘制）。
     glPushAttrib(GL_ENABLE_BIT)
     glEnable(GL_CULL_FACE)
+    # 绑定纹理 Atlas
+    glEnable(GL_TEXTURE_2D)
+    glBindTexture(GL_TEXTURE_2D, atlas_tex_id)
+    # 开启 alpha 混合：水纹理 alpha=180（半透明），不开启会渲染成不透明。
+    glEnable(GL_BLEND)
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+    glEnableClientState(GL_TEXTURE_COORD_ARRAY)
+    STRIDE = 32  # 8 floats * 4 bytes
     for chunk in list(chunks.values()):
         if chunk.load_level > LOAD_LEVEL_FULL:
             continue
@@ -405,11 +418,15 @@ def render_chunks():
                 glBindBuffer(GL_ARRAY_BUFFER, sub.faceVBO)
                 glEnableClientState(GL_VERTEX_ARRAY)
                 glEnableClientState(GL_COLOR_ARRAY)
-                glVertexPointer(3, GL_FLOAT, 24, ctypes.c_void_p(0))
-                glColorPointer(3, GL_FLOAT, 24, ctypes.c_void_p(12))
+                glVertexPointer(3, GL_FLOAT, STRIDE, ctypes.c_void_p(0))
+                glTexCoordPointer(2, GL_FLOAT, STRIDE, ctypes.c_void_p(12))  # u,v at offset 12
+                glColorPointer(3, GL_FLOAT, STRIDE, ctypes.c_void_p(20))      # r,g,b at offset 20
                 glDrawArrays(GL_TRIANGLES, 0, sub.faceCount)
                 glDisableClientState(GL_VERTEX_ARRAY)
                 glDisableClientState(GL_COLOR_ARRAY)
+    glDisableClientState(GL_TEXTURE_COORD_ARRAY)
+    glDisable(GL_TEXTURE_2D)
+    glBindTexture(GL_TEXTURE_2D, 0)
     glPopAttrib()
     glBindBuffer(GL_ARRAY_BUFFER, 0)
 

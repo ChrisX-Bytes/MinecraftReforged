@@ -6,28 +6,19 @@
   <component name="ChangeListManager">
     <list default="true" id="a00031a3-a4b9-428a-bfc3-1fbe49bfaa16" name="更改" comment="">
       <change beforePath="$PROJECT_DIR$/chunk_manager.py" beforeDir="false" afterPath="$PROJECT_DIR$/chunk_manager.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/build/CMakeFiles/4.4.2/CMakeDetermineCompilerABI_C.bin" beforeDir="false" afterPath="$PROJECT_DIR$/cpp/build/CMakeFiles/4.4.2/CMakeDetermineCompilerABI_C.bin" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/build/CMakeFiles/4.4.2/CMakeDetermineCompilerABI_CXX.bin" beforeDir="false" afterPath="$PROJECT_DIR$/cpp/build/CMakeFiles/4.4.2/CMakeDetermineCompilerABI_CXX.bin" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/build/CMakeFiles/4.4.2/CompilerIdC/CompilerIdC.exe" beforeDir="false" afterPath="$PROJECT_DIR$/cpp/build/CMakeFiles/4.4.2/CompilerIdC/CompilerIdC.exe" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/build/CMakeFiles/4.4.2/CompilerIdC/Debug/CMakeCCompilerId.obj" beforeDir="false" afterPath="$PROJECT_DIR$/cpp/build/CMakeFiles/4.4.2/CompilerIdC/Debug/CMakeCCompilerId.obj" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/build/CMakeFiles/4.4.2/CompilerIdCXX/CompilerIdCXX.exe" beforeDir="false" afterPath="$PROJECT_DIR$/cpp/build/CMakeFiles/4.4.2/CompilerIdCXX/CompilerIdCXX.exe" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/build/CMakeFiles/4.4.2/CompilerIdCXX/Debug/CMakeCXXCompilerId.obj" beforeDir="false" afterPath="$PROJECT_DIR$/cpp/build/CMakeFiles/4.4.2/CompilerIdCXX/Debug/CMakeCXXCompilerId.obj" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/build/CMakeFiles/CMakeConfigureLog.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/cpp/build/CMakeFiles/CMakeConfigureLog.yaml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/build/Release/minecraft_core.cp314-win_amd64.pyd" beforeDir="false" afterPath="$PROJECT_DIR$/cpp/build/Release/minecraft_core.cp314-win_amd64.pyd" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/build/minecraft_core.dir/Release/bindings.obj" beforeDir="false" afterPath="$PROJECT_DIR$/cpp/build/minecraft_core.dir/Release/bindings.obj" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/build/minecraft_core.dir/Release/chunk.obj" beforeDir="false" afterPath="$PROJECT_DIR$/cpp/build/minecraft_core.dir/Release/chunk.obj" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/build/minecraft_core.dir/Release/fluid_simulator.obj" beforeDir="false" afterPath="$PROJECT_DIR$/cpp/build/minecraft_core.dir/Release/fluid_simulator.obj" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/build/minecraft_core.dir/Release/minecraft_core.cp314-win_amd64.iobj" beforeDir="false" afterPath="$PROJECT_DIR$/cpp/build/minecraft_core.dir/Release/minecraft_core.cp314-win_amd64.iobj" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/config.py" beforeDir="false" afterPath="$PROJECT_DIR$/config.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/build/ALL_BUILD.vcxproj" beforeDir="false" afterPath="$PROJECT_DIR$/cpp/build/ALL_BUILD.vcxproj" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/build/CMakeFiles/generate.stamp.depend" beforeDir="false" afterPath="$PROJECT_DIR$/cpp/build/CMakeFiles/generate.stamp.depend" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/build/ZERO_CHECK.vcxproj" beforeDir="false" afterPath="$PROJECT_DIR$/cpp/build/ZERO_CHECK.vcxproj" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/cpp/build/minecraft_core.dir/Release/minecraft_core.tlog/CL.command.1.tlog" beforeDir="false" afterPath="$PROJECT_DIR$/cpp/build/minecraft_core.dir/Release/minecraft_core.tlog/CL.command.1.tlog" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/build/minecraft_core.dir/Release/minecraft_core.tlog/CL.read.1.tlog" beforeDir="false" afterPath="$PROJECT_DIR$/cpp/build/minecraft_core.dir/Release/minecraft_core.tlog/CL.read.1.tlog" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/build/minecraft_core.dir/Release/minecraft_core.tlog/CL.read.1.tlog" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/cpp/build/minecraft_core.dir/Release/minecraft_core.tlog/CL.write.1.tlog" beforeDir="false" afterPath="$PROJECT_DIR$/cpp/build/minecraft_core.dir/Release/minecraft_core.tlog/CL.write.1.tlog" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/build/minecraft_core.dir/Release/subchunk.obj" beforeDir="false" afterPath="$PROJECT_DIR$/cpp/build/minecraft_core.dir/Release/subchunk.obj" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/build/minecraft_core.dir/Release/world.obj" beforeDir="false" afterPath="$PROJECT_DIR$/cpp/build/minecraft_core.dir/Release/world.obj" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/cpp/src/subchunk.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/cpp/src/subchunk.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/minecraft_core.cp314-win_amd64.pyd" beforeDir="false" afterPath="$PROJECT_DIR$/minecraft_core.cp314-win_amd64.pyd" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/world_gen/density.py" beforeDir="false" afterPath="$PROJECT_DIR$/world_gen/density.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/world_gen/generator.py" beforeDir="false" afterPath="$PROJECT_DIR$/world_gen/generator.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/build/minecraft_core.dir/Release/minecraft_core.tlog/CustomBuild.read.1.tlog" beforeDir="false" afterPath="$PROJECT_DIR$/cpp/build/minecraft_core.dir/Release/minecraft_core.tlog/CustomBuild.read.1.tlog" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/build/minecraft_core.vcxproj" beforeDir="false" afterPath="$PROJECT_DIR$/cpp/build/minecraft_core.vcxproj" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/build/x64/Release/ZERO_CHECK/ZERO_CHECK.tlog/CustomBuild.read.1.tlog" beforeDir="false" afterPath="$PROJECT_DIR$/cpp/build/x64/Release/ZERO_CHECK/ZERO_CHECK.tlog/CustomBuild.read.1.tlog" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/include/world.h" beforeDir="false" afterPath="$PROJECT_DIR$/cpp/include/world.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/src/bindings.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/cpp/src/bindings.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cpp/src/fluid_simulator.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/cpp/src/fluid_simulator.cpp" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -143,6 +134,7 @@
       <workItem from="1785721478854" duration="2254000" />
       <workItem from="1785737233374" duration="85000" />
       <workItem from="1785744473042" duration="1363000" />
+      <workItem from="1785813051743" duration="374000" />
     </task>
     <servers />
   </component>
